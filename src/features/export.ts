@@ -4,6 +4,8 @@
 
 import { writeFileSync } from "fs";
 import { scoreDomain } from "./scoring.js";
+import { safePath } from "../validate.js";
+import type { DomainEntry } from "../types.js";
 
 interface ExportEntry {
   domain: string;
@@ -21,7 +23,7 @@ interface ExportEntry {
   registered: boolean;
 }
 
-function toExportEntry(d: any): ExportEntry {
+function toExportEntry(d: DomainEntry): ExportEntry {
   const score = scoreDomain(d.domain);
   return {
     domain: d.domain,
@@ -40,7 +42,9 @@ function toExportEntry(d: any): ExportEntry {
   };
 }
 
-export function exportToCSV(domains: any[], filePath: string): string {
+export function exportToCSV(domains: DomainEntry[], filePath: string): string {
+  if (domains.length === 0) throw new Error("No domains to export");
+  const safe = safePath(filePath, [process.cwd()]);
   const entries = domains.map(toExportEntry);
   const headers = Object.keys(entries[0] || {});
   const rows = entries.map((e) =>
@@ -50,11 +54,13 @@ export function exportToCSV(domains: any[], filePath: string): string {
     }).join(",")
   );
   const csv = [headers.join(","), ...rows].join("\n");
-  writeFileSync(filePath, csv, "utf-8");
-  return filePath;
+  writeFileSync(safe, csv, "utf-8");
+  return safe;
 }
 
-export function exportToJSON(domains: any[], filePath: string): string {
+export function exportToJSON(domains: DomainEntry[], filePath: string): string {
+  if (domains.length === 0) throw new Error("No domains to export");
+  const safe = safePath(filePath, [process.cwd()]);
   const entries = domains.map(toExportEntry);
   const json = JSON.stringify({
     exported: new Date().toISOString(),
@@ -63,6 +69,6 @@ export function exportToJSON(domains: any[], filePath: string): string {
     expired: entries.filter((e) => e.expired).length,
     domains: entries,
   }, null, 2);
-  writeFileSync(filePath, json, "utf-8");
-  return filePath;
+  writeFileSync(safe, json, "utf-8");
+  return safe;
 }
