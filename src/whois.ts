@@ -1,7 +1,8 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
+import { assertValidDomain, isValidDomain } from "./validate.js";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface WhoisResult {
   domain: string;
@@ -154,8 +155,9 @@ function parseWhoisResponse(domain: string, raw: string): WhoisResult {
  * Perform a WHOIS lookup for a domain
  */
 export async function whoisLookup(domain: string): Promise<WhoisResult> {
+  assertValidDomain(domain);
   try {
-    const { stdout, stderr } = await execAsync(`whois ${domain}`, {
+    const { stdout, stderr } = await execFileAsync("whois", [domain], {
       timeout: 15000,
     });
 
@@ -188,6 +190,7 @@ export async function whoisLookup(domain: string): Promise<WhoisResult> {
 export async function verifyAvailability(
   domain: string
 ): Promise<{ available: boolean; confidence: "high" | "medium" | "low"; checks: string[] }> {
+  assertValidDomain(domain);
   const checks: string[] = [];
   let availableCount = 0;
   let totalChecks = 0;
@@ -207,7 +210,7 @@ export async function verifyAvailability(
 
   // Check 2: DNS resolution check
   try {
-    const { stdout } = await execAsync(`dig +short ${domain} A`, {
+    const { stdout } = await execFileAsync("dig", ["+short", domain, "A"], {
       timeout: 10000,
     });
     totalChecks++;
@@ -223,7 +226,7 @@ export async function verifyAvailability(
 
   // Check 3: NS record check
   try {
-    const { stdout } = await execAsync(`dig +short ${domain} NS`, {
+    const { stdout } = await execFileAsync("dig", ["+short", domain, "NS"], {
       timeout: 10000,
     });
     totalChecks++;
@@ -257,5 +260,6 @@ export function parseDomainList(content: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#") && !line.startsWith("//"))
-    .map((line) => line.toLowerCase());
+    .map((line) => line.toLowerCase())
+    .filter(isValidDomain);
 }
