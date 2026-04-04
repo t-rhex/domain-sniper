@@ -21,6 +21,14 @@ import { exportToCSV, exportToJSON } from "./features/export.js";
 import { DomainWatcher, formatInterval } from "./features/watch.js";
 import { saveSession, loadSession, listSessions } from "./features/session.js";
 import { filterDomains, nextStatus, nextSort, DEFAULT_FILTER, type FilterConfig, type FilterStatus, type SortField } from "./features/filter.js";
+import { rdapLookup } from "./features/rdap.js";
+import { checkSsl } from "./features/ssl-check.js";
+import { discoverSubdomains, getActiveSubdomains } from "./features/subdomain-discovery.js";
+import { checkMarketplaces } from "./features/marketplace.js";
+import { sendWebhook } from "./features/webhooks.js";
+import { loadConfig } from "./features/config.js";
+import { generateSuggestions } from "./features/domain-suggest.js";
+import { addToPortfolio } from "./features/portfolio.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -76,9 +84,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
 
   const processDomain = useCallback(async (domain: string): Promise<DomainEntry> => {
     const entry: DomainEntry = {
-      domain, status: "checking", whois: null, verification: null,
-      registrarCheck: null, registration: null, error: null, tagged: false,
-      dns: null, httpProbe: null, wayback: null, domainAge: null,
+      ...createEmptyEntry(domain),
+      status: "checking",
     };
     try {
       const whois = await whoisLookup(domain);
@@ -103,15 +110,35 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       else { entry.status = "taken"; log(`✕ TAKEN ${domain}`, theme.textDisabled); }
 
       // New features — run in parallel, don't block on failures
-      const [dns, probe, wayback] = await Promise.all([
+      const [dns, probe, wayback, rdap, ssl, subdomains, marketplace] = await Promise.all([
         lookupDns(domain).catch(() => null),
         httpProbe(domain).catch(() => null),
         checkWayback(domain).catch(() => null),
+        rdapLookup(domain).catch(() => null),
+        checkSsl(domain).catch(() => null),
+        discoverSubdomains(domain).catch(() => null),
+        checkMarketplaces(domain).catch(() => null),
       ]);
       entry.dns = dns;
       entry.httpProbe = probe;
       entry.wayback = wayback;
+      entry.rdap = rdap;
+      entry.ssl = ssl;
+      entry.subdomains = subdomains;
+      entry.marketplace = marketplace;
       entry.domainAge = calculateDomainAge(entry.whois?.createdDate ?? null);
+
+      // Send webhook notification if configured
+      if ((entry.status === "available" || entry.status === "expired")) {
+        const cfg = loadConfig();
+        if (cfg.notifications.webhookUrl) {
+          void sendWebhook(cfg.notifications.webhookUrl, {
+            domain: entry.domain,
+            status: entry.status,
+            timestamp: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      }
 
       return entry;
     } catch (err: unknown) {
@@ -322,6 +349,29 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
             setMode("watching");
             log(`Watching ${watchDomains.length} domains (1h interval)`, theme.info);
           }
+        }
+      }
+
+      // Domain suggestions
+      else if (key === "d" && selected) {
+        const name = selected.domain.split(".")[0] || "";
+        const suggestions = generateSuggestions(name);
+        const suggDomains = suggestions.slice(0, 15).map((s) => s.domain);
+        log(`Generated ${suggDomains.length} suggestions from "${name}"`, theme.info);
+        if (suggDomains.length > 0) processAllDomains(suggDomains, true);
+      }
+
+      // Add to portfolio
+      else if (key === "p" && selected) {
+        try {
+          addToPortfolio(selected.domain, {
+            registrar: selected.whois?.registrar || selected.rdap?.registrar || "unknown",
+            expiryDate: selected.whois?.expiryDate || selected.rdap?.expiryDate || "",
+            purchaseDate: new Date().toISOString().split("T")[0],
+          });
+          log(`Added ${selected.domain} to portfolio`, theme.info);
+        } catch (err: unknown) {
+          log(`Portfolio: ${err instanceof Error ? err.message : "failed"}`, theme.error);
         }
       }
 
@@ -568,6 +618,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  SPACE         Tag / untag domain" fg={theme.textSecondary} />
                 <text content="  r             Register selected" fg={theme.textSecondary} />
                 <text content="  R             Bulk register tagged" fg={theme.textSecondary} />
+                <text content="  d             Suggest similar domains" fg={theme.textSecondary} />
+                <text content="  p             Add to portfolio" fg={theme.textSecondary} />
                 <text content="  w             Watch tagged (1h)" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Filter & Sort" fg={theme.secondary} />
@@ -707,6 +759,63 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   </box>
                 )}
 
+                {/* RDAP */}
+                {selected.rdap && !selected.rdap.error && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.info} /><text content="RDAP" fg={theme.info} /></box>
+                    {selected.rdap.registrar && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Registrar", 12)} fg={theme.textMuted} /><text content={selected.rdap.registrar} fg={theme.text} /></box>)}
+                    {selected.rdap.status.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Status", 12)} fg={theme.textMuted} /><text content={selected.rdap.status.slice(0, 3).join(", ")} fg={theme.textSecondary} /></box>)}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* SSL Certificate */}
+                {selected.ssl && !selected.ssl.error && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.primary} /><text content="SSL CERTIFICATE" fg={theme.primary} /></box>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Valid", 12)} fg={theme.textMuted} /><text content={selected.ssl.valid ? "Yes" : "No"} fg={selected.ssl.valid ? theme.primary : theme.error} /></box>
+                    {selected.ssl.issuer && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Issuer", 12)} fg={theme.textMuted} /><text content={selected.ssl.issuer} fg={theme.text} /></box>)}
+                    {selected.ssl.daysUntilExpiry !== null && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Cert Expiry", 12)} fg={theme.textMuted} /><text content={`${selected.ssl.daysUntilExpiry}d`} fg={selected.ssl.daysUntilExpiry < 30 ? theme.error : theme.textSecondary} /></box>)}
+                    {selected.ssl.protocol && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Protocol", 12)} fg={theme.textMuted} /><text content={selected.ssl.protocol} fg={theme.textSecondary} /></box>)}
+                    {selected.ssl.sans.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("SANs", 12)} fg={theme.textMuted} /><text content={selected.ssl.sans.slice(0, 3).join(", ")} fg={theme.textSecondary} /></box>)}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Subdomains */}
+                {selected.subdomains && (() => {
+                  const active = selected.subdomains!.filter((s) => s.resolved);
+                  return active.length > 0 ? (
+                    <box flexDirection="column" paddingLeft={1}>
+                      <box flexDirection="row" gap={1}><text content="┃" fg={theme.secondary} /><text content={`SUBDOMAINS (${active.length} found)`} fg={theme.secondary} /></box>
+                      {active.slice(0, 8).map((s) => (
+                        <box key={s.subdomain} flexDirection="row" gap={1}>
+                          <text content="┃" fg={theme.borderSubtle} />
+                          <text content={pad(s.subdomain, 12)} fg={theme.textMuted} />
+                          <text content={s.ip || ""} fg={theme.textSecondary} />
+                        </box>
+                      ))}
+                      {active.length > 8 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`  +${active.length - 8} more`} fg={theme.textDisabled} /></box>)}
+                      <text content="" />
+                    </box>
+                  ) : null;
+                })()}
+
+                {/* Marketplace */}
+                {selected.marketplace && selected.marketplace.length > 0 && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.warning} /><text content="MARKETPLACE" fg={theme.warning} /></box>
+                    {selected.marketplace.map((m) => (
+                      <box key={m.source} flexDirection="row" gap={1}>
+                        <text content="┃" fg={theme.borderSubtle} />
+                        <text content={pad(m.source, 12)} fg={theme.textMuted} />
+                        <text content={m.price ? `$${m.price}` : m.listed ? "Listed" : "—"} fg={m.price ? theme.warning : theme.textDisabled} />
+                      </box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
                 {/* Registration */}
                 {selected.registration && (
                   <box flexDirection="column" paddingLeft={1}>
@@ -780,6 +889,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <box backgroundColor={theme.textDisabled}><text content=" v " fg={theme.background} /></box><text content="vars" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" ␣ " fg={theme.background} /></box><text content="tag" fg={theme.textMuted} />
                 {registrarConfig?.apiKey && (<><box backgroundColor={theme.textDisabled}><text content=" r " fg={theme.background} /></box><text content="reg" fg={theme.textMuted} /></>)}
+                <box backgroundColor={theme.textDisabled}><text content=" d " fg={theme.background} /></box><text content="suggest" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" p " fg={theme.background} /></box><text content="portfolio" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" ? " fg={theme.background} /></box><text content="help" fg={theme.textMuted} />
               </>
             ) : (
