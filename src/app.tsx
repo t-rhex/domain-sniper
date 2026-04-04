@@ -7,6 +7,7 @@ import {
 } from "./registrar.js";
 import { readFileSync, existsSync } from "fs";
 import { theme, borders, statusStyle, type DomainStatus } from "./theme.js";
+import type { DomainEntry } from "./types.js";
 import { expandTlds, type TldPreset } from "./features/tld-expand.js";
 import { generateVariations } from "./features/variations.js";
 import { scoreDomain, scoreGrade } from "./features/scoring.js";
@@ -19,17 +20,6 @@ import { filterDomains, nextStatus, nextSort, DEFAULT_FILTER, type FilterConfig,
 
 type Mode = "idle" | "input" | "scanning" | "done" | "watching";
 type InputMode = "domain" | "file" | "expand" | "variations" | "export" | "load";
-
-interface DomainEntry {
-  domain: string;
-  status: DomainStatus;
-  whois: WhoisResult | null;
-  verification: { available: boolean; confidence: string; checks: string[] } | null;
-  registrarCheck: { available: boolean; price?: number; currency?: string } | null;
-  registration: RegistrationResult | null;
-  error: string | null;
-  tagged: boolean;
-}
 
 interface AppProps {
   initialDomains?: string[];
@@ -79,6 +69,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     const entry: DomainEntry = {
       domain, status: "checking", whois: null, verification: null,
       registrarCheck: null, registration: null, error: null, tagged: false,
+      dns: null, httpProbe: null, wayback: null, domainAge: null,
     };
     try {
       const whois = await whoisLookup(domain);
@@ -116,6 +107,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     const entries: DomainEntry[] = domainList.map((d) => ({
       domain: d, status: "pending" as DomainStatus, whois: null,
       verification: null, registrarCheck: null, registration: null, error: null, tagged: false,
+      dns: null, httpProbe: null, wayback: null, domainAge: null,
     }));
 
     if (append) {
