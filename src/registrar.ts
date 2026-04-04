@@ -5,6 +5,23 @@
 
 export type RegistrarProvider = "godaddy" | "namecheap" | "cloudflare";
 
+interface GodaddyAvailabilityResponse {
+  available: boolean;
+  price?: number;
+  currency?: string;
+}
+
+interface GodaddyPurchaseResponse {
+  orderId?: number;
+  message?: string;
+}
+
+interface CloudflareResponse<T> {
+  success: boolean;
+  result?: T;
+  errors?: { message: string }[];
+}
+
 export interface RegistrarConfig {
   provider: RegistrarProvider;
   apiKey: string;
@@ -48,20 +65,20 @@ async function godaddyCheckAvailability(
         },
       }
     );
-    const data: any = await resp.json();
+    const data = (await resp.json()) as GodaddyAvailabilityResponse;
     return {
       domain,
       available: data.available === true,
       price: data.price ? data.price / 1000000 : undefined,
       currency: data.currency || "USD",
-      provider: "godaddy",
+      provider: "godaddy" as const,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       domain,
       available: false,
-      provider: "godaddy",
-      error: err.message,
+      provider: "godaddy" as const,
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -93,12 +110,12 @@ async function godaddyRegister(
       body: JSON.stringify(body),
     });
 
-    const data: any = await resp.json();
+    const data = (await resp.json()) as GodaddyPurchaseResponse;
     if (resp.ok) {
       return {
         success: true,
         domain,
-        provider: "godaddy",
+        provider: "godaddy" as const,
         message: `Domain ${domain} registered successfully!`,
         orderId: data.orderId?.toString(),
       };
@@ -106,17 +123,17 @@ async function godaddyRegister(
     return {
       success: false,
       domain,
-      provider: "godaddy",
+      provider: "godaddy" as const,
       message: "Registration failed",
       error: data.message || JSON.stringify(data),
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
       domain,
-      provider: "godaddy",
+      provider: "godaddy" as const,
       message: "Registration failed",
-      error: err.message,
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -150,14 +167,14 @@ async function namecheapCheckAvailability(
     return {
       domain,
       available,
-      provider: "namecheap",
+      provider: "namecheap" as const,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       domain,
       available: false,
-      provider: "namecheap",
-      error: err.message,
+      provider: "namecheap" as const,
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -187,7 +204,7 @@ async function namecheapRegister(
       return {
         success: true,
         domain,
-        provider: "namecheap",
+        provider: "namecheap" as const,
         message: `Domain ${domain} registered via Namecheap!`,
       };
     }
@@ -195,17 +212,17 @@ async function namecheapRegister(
     return {
       success: false,
       domain,
-      provider: "namecheap",
+      provider: "namecheap" as const,
       message: "Registration failed",
       error: text.match(/<Error.*?>(.*?)<\/Error>/)?.[1] || "Unknown error",
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
       domain,
-      provider: "namecheap",
+      provider: "namecheap" as const,
       message: "Registration failed",
-      error: err.message,
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -235,28 +252,36 @@ async function cloudflareCheckAvailability(
         },
       }
     );
-    const data: any = await resp.json();
+    const data = (await resp.json()) as CloudflareResponse<{ available?: boolean }>;
 
-    // If domain is not found in their registrar, check availability
-    if (!data.success || data.result?.available) {
+    if (!data.success) {
+      return {
+        domain,
+        available: false,
+        provider: "cloudflare" as const,
+        error: data.errors?.[0]?.message || "API request failed",
+      };
+    }
+
+    if (data.result?.available) {
       return {
         domain,
         available: true,
-        provider: "cloudflare",
+        provider: "cloudflare" as const,
       };
     }
 
     return {
       domain,
       available: false,
-      provider: "cloudflare",
+      provider: "cloudflare" as const,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       domain,
       available: false,
-      provider: "cloudflare",
-      error: err.message,
+      provider: "cloudflare" as const,
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -270,7 +295,7 @@ async function cloudflareRegister(
       return {
         success: false,
         domain,
-        provider: "cloudflare",
+        provider: "cloudflare" as const,
         message: "Registration failed",
         error: "Account ID required for Cloudflare",
       };
@@ -289,13 +314,13 @@ async function cloudflareRegister(
         }),
       }
     );
-    const data: any = await resp.json();
+    const data = (await resp.json()) as CloudflareResponse<{ id?: string }>;
 
     if (data.success) {
       return {
         success: true,
         domain,
-        provider: "cloudflare",
+        provider: "cloudflare" as const,
         message: `Domain ${domain} registered via Cloudflare!`,
         orderId: data.result?.id,
       };
@@ -304,17 +329,17 @@ async function cloudflareRegister(
     return {
       success: false,
       domain,
-      provider: "cloudflare",
+      provider: "cloudflare" as const,
       message: "Registration failed",
       error: data.errors?.[0]?.message || "Unknown error",
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
       domain,
-      provider: "cloudflare",
+      provider: "cloudflare" as const,
       message: "Registration failed",
-      error: err.message,
+      error: err instanceof Error ? err.message : "Unknown error",
     };
   }
 }
@@ -374,9 +399,12 @@ export function loadConfigFromEnv(): RegistrarConfig | null {
     return null;
   }
 
+  const apiKey = process.env.REGISTRAR_API_KEY || "";
+  if (!apiKey) return null;
+
   return {
     provider,
-    apiKey: process.env.REGISTRAR_API_KEY || "",
+    apiKey,
     apiSecret: process.env.REGISTRAR_API_SECRET || "",
     accountId: process.env.CLOUDFLARE_ACCOUNT_ID || "",
     username: process.env.NAMECHEAP_USERNAME || "",
