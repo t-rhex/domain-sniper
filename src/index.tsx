@@ -3,6 +3,11 @@ import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { App } from "./app.js";
 import { Command } from "commander";
+import { lookupDns } from "./features/dns-details.js";
+import { httpProbe } from "./features/http-probe.js";
+import { checkWayback } from "./features/wayback.js";
+import { calculateDomainAge } from "./features/domain-age.js";
+import { sanitizeDomainList, safePath } from "./validate.js";
 
 const program = new Command();
 
@@ -14,7 +19,7 @@ program
   .option("-f, --file <path>", "Path to file with domains (one per line)")
   .option("-a, --auto-register", "Automatically register available domains", false)
   .option("--headless", "Run in non-interactive mode (print results to stdout)", false)
-  .action(async (domains: string[], options: any) => {
+  .action(async (domains: string[], options: CliOptions) => {
     if (options.headless || !process.stdout.isTTY) {
       // Non-interactive mode
       await runHeadless(domains, options);
@@ -39,7 +44,13 @@ program.parse();
 
 // ─── Headless / non-interactive mode ──────────────────────
 
-async function runHeadless(domains: string[], options: any) {
+interface CliOptions {
+  file?: string;
+  autoRegister: boolean;
+  headless: boolean;
+}
+
+async function runHeadless(domains: string[], options: CliOptions) {
   const { whoisLookup, verifyAvailability, parseDomainList } = await import("./whois.js");
   const { loadConfigFromEnv, checkAvailabilityViaRegistrar, registerDomain } = await import("./registrar.js");
   const { readFileSync, existsSync } = await import("fs");
@@ -48,13 +59,16 @@ async function runHeadless(domains: string[], options: any) {
 
   // Load from file if specified
   if (options.file) {
-    if (!existsSync(options.file)) {
-      console.error(`File not found: ${options.file}`);
+    const filePath = safePath(options.file, [process.cwd()]);
+    if (!existsSync(filePath)) {
+      console.error(`File not found: ${filePath}`);
       process.exit(1);
     }
-    const content = readFileSync(options.file, "utf-8");
+    const content = readFileSync(filePath, "utf-8");
     domainList.push(...parseDomainList(content));
   }
+
+  domainList = sanitizeDomainList(domainList);
 
   if (domainList.length === 0) {
     console.error("No domains specified. Use: domain-sniper example.com or -f domains.txt");
@@ -91,6 +105,38 @@ async function runHeadless(domains: string[], options: any) {
     for (const check of verification.checks) {
       console.log(`    ${check}`);
     }
+
+    // DNS details
+    try {
+      const dns = await lookupDns(domain);
+      if (dns.a.length) console.log(`    DNS A: ${dns.a.join(", ")}`);
+      if (dns.mx.length) console.log(`    DNS MX: ${dns.mx.join(", ")}`);
+      if (dns.aaaa.length) console.log(`    DNS AAAA: ${dns.aaaa.join(", ")}`);
+    } catch {}
+
+    // HTTP probe
+    try {
+      const probe = await httpProbe(domain);
+      if (probe.reachable) {
+        let httpLine = `    HTTP: ${probe.status}`;
+        if (probe.parked) httpLine += " (PARKED)";
+        if (probe.server) httpLine += ` [${probe.server}]`;
+        console.log(httpLine);
+        if (probe.redirectUrl) console.log(`    Redirect: ${probe.redirectUrl}`);
+      }
+    } catch {}
+
+    // Wayback Machine
+    try {
+      const wb = await checkWayback(domain);
+      if (wb.hasHistory) {
+        console.log(`    Wayback: ~${wb.snapshots} snapshots${wb.firstArchived ? ` (${wb.firstArchived}` : ""}${wb.lastArchived ? ` - ${wb.lastArchived})` : wb.firstArchived ? ")" : ""}`);
+      }
+    } catch {}
+
+    // Domain age
+    const age = calculateDomainAge(whois.createdDate);
+    if (age) console.log(`    Age: ${age}`);
 
     // Registrar check
     if (config?.apiKey) {
