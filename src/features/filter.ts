@@ -4,6 +4,7 @@
 
 import type { DomainScore } from "./scoring.js";
 import { scoreDomain } from "./scoring.js";
+import type { DomainEntry } from "../types.js";
 
 export type SortField = "domain" | "status" | "score" | "expiry" | "price";
 export type SortOrder = "asc" | "desc";
@@ -25,7 +26,7 @@ export const DEFAULT_FILTER: FilterConfig = {
   minScore: 0,
 };
 
-export function filterDomains(domains: any[], config: FilterConfig): any[] {
+export function filterDomains(domains: DomainEntry[], config: FilterConfig): DomainEntry[] {
   let filtered = [...domains];
 
   // Status filter
