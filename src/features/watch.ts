@@ -3,7 +3,7 @@
  */
 
 import { whoisLookup, verifyAvailability } from "../whois.js";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 
 export interface WatchConfig {
   domains: string[];
@@ -64,10 +64,10 @@ export class DomainWatcher {
     this.cycle = 0;
 
     // Run immediately
-    this.runCycle();
+    void this.runCycle();
 
     // Set interval
-    this.timer = setInterval(() => this.runCycle(), this.config.intervalMs);
+    this.timer = setInterval(() => { void this.runCycle(); }, this.config.intervalMs);
   }
 
   stop() {
@@ -97,13 +97,17 @@ export class DomainWatcher {
 
 function sendDesktopNotification(domain: string, status: string) {
   const title = "Domain Sniper";
-  const msg = status === "available"
+  const rawMsg = status === "available"
     ? `${domain} is AVAILABLE!`
     : `${domain} has EXPIRED and may be available soon`;
 
+  // Strip double quotes and backslashes to prevent osascript injection
+  const msg = rawMsg.replace(/["\\]/g, "");
+
   // macOS notification
   try {
-    exec(`osascript -e 'display notification "${msg}" with title "${title}" sound name "Glass"'`);
+    const script = `display notification "${msg}" with title "${title}" sound name "Glass"`;
+    execFile("osascript", ["-e", script], () => {});
   } catch {
     // Notification failed silently
   }
