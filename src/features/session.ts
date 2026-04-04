@@ -2,7 +2,9 @@
  * Session persistence — save/load scan results to disk
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
+import { isValidSessionId } from "../validate.js";
+import type { DomainEntry } from "../types.js";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -11,7 +13,7 @@ const SESSION_DIR = join(homedir(), ".domain-sniper", "sessions");
 export interface SavedSession {
   id: string;
   timestamp: string;
-  domains: any[];
+  domains: DomainEntry[];
   watchlist: string[];
   tags: Record<string, string[]>;  // domain -> tags
   notes: Record<string, string>;   // domain -> note
@@ -23,7 +25,7 @@ function ensureDir() {
   }
 }
 
-export function saveSession(domains: any[], watchlist: string[] = [], tags: Record<string, string[]> = {}, notes: Record<string, string> = {}): string {
+export function saveSession(domains: DomainEntry[], watchlist: string[] = [], tags: Record<string, string[]> = {}, notes: Record<string, string> = {}): string {
   ensureDir();
   const id = `scan-${Date.now()}`;
   const session: SavedSession = {
@@ -39,15 +41,15 @@ export function saveSession(domains: any[], watchlist: string[] = [], tags: Reco
   return path;
 }
 
-export function loadSession(idOrPath: string): SavedSession | null {
+export function loadSession(id: string): SavedSession | null {
+  if (!isValidSessionId(id)) return null;
   try {
-    let path = idOrPath;
-    if (!existsSync(path)) {
-      path = join(SESSION_DIR, `${idOrPath}.json`);
-    }
+    const path = join(SESSION_DIR, `${id}.json`);
     if (!existsSync(path)) return null;
     const content = readFileSync(path, "utf-8");
-    return JSON.parse(content) as SavedSession;
+    const parsed = JSON.parse(content) as SavedSession | null;
+    if (!parsed || !Array.isArray(parsed.domains)) return null;
+    return parsed;
   } catch {
     return null;
   }
@@ -56,7 +58,6 @@ export function loadSession(idOrPath: string): SavedSession | null {
 export function listSessions(): { id: string; timestamp: string; count: number; path: string }[] {
   ensureDir();
   try {
-    const { readdirSync } = require("fs");
     const files = readdirSync(SESSION_DIR) as string[];
     return files
       .filter((f: string) => f.endsWith(".json"))
@@ -74,18 +75,18 @@ export function listSessions(): { id: string; timestamp: string; count: number; 
           return null;
         }
       })
-      .filter(Boolean)
-      .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp)) as any[];
+      .filter((s): s is NonNullable<typeof s> => s !== null)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   } catch {
     return [];
   }
 }
 
 export function deleteSession(id: string): boolean {
+  if (!isValidSessionId(id)) return false;
   const path = join(SESSION_DIR, `${id}.json`);
   try {
     if (existsSync(path)) {
-      const { unlinkSync } = require("fs");
       unlinkSync(path);
       return true;
     }
