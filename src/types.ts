@@ -5,6 +5,15 @@
 import type { DomainStatus } from "./theme.js";
 import type { WhoisResult } from "./whois.js";
 import type { RegistrationResult } from "./registrar.js";
+import type { RdapResult } from "./features/rdap.js";
+import type { SslResult } from "./features/ssl-check.js";
+import type { SubdomainResult } from "./features/subdomain-discovery.js";
+import type { MarketplaceListing } from "./features/marketplace.js";
+
+export type { RdapResult } from "./features/rdap.js";
+export type { SslResult } from "./features/ssl-check.js";
+export type { SubdomainResult } from "./features/subdomain-discovery.js";
+export type { MarketplaceListing } from "./features/marketplace.js";
 
 export interface DnsDetails {
   a: string[];
@@ -43,6 +52,10 @@ export interface DomainEntry {
   httpProbe: HttpProbeResult | null;
   wayback: WaybackResult | null;
   domainAge: string | null;
+  rdap: RdapResult | null;
+  ssl: SslResult | null;
+  subdomains: SubdomainResult[] | null;
+  marketplace: MarketplaceListing[] | null;
 }
 
 /**
@@ -62,5 +75,9 @@ export function createEmptyEntry(domain: string): DomainEntry {
     httpProbe: null,
     wayback: null,
     domainAge: null,
+    rdap: null,
+    ssl: null,
+    subdomains: null,
+    marketplace: null,
   };
 }
