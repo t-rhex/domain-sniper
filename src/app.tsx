@@ -8,6 +8,12 @@ import {
 import { readFileSync, existsSync } from "fs";
 import { theme, borders, statusStyle, type DomainStatus } from "./theme.js";
 import type { DomainEntry } from "./types.js";
+import { createEmptyEntry } from "./types.js";
+import { sanitizeDomainList, safePath } from "./validate.js";
+import { lookupDns } from "./features/dns-details.js";
+import { httpProbe } from "./features/http-probe.js";
+import { checkWayback } from "./features/wayback.js";
+import { calculateDomainAge, daysUntilExpiry } from "./features/domain-age.js";
 import { expandTlds, type TldPreset } from "./features/tld-expand.js";
 import { generateVariations } from "./features/variations.js";
 import { scoreDomain, scoreGrade } from "./features/scoring.js";
@@ -56,6 +62,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
   const processingRef = useRef(false);
+  const domainsCountRef = useRef(0);
+
+  useEffect(() => { domainsCountRef.current = domains.length; }, [domains.length]);
 
   // ─── Log ────────────────────────────────────────────────
 
@@ -83,7 +92,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         try {
           const regCheck = await checkAvailabilityViaRegistrar(domain, registrarConfig);
           entry.registrarCheck = { available: regCheck.available, price: regCheck.price, currency: regCheck.currency };
-        } catch {}
+        } catch (err: unknown) {
+          log(`REG check failed: ${err instanceof Error ? err.message : "unknown"}`, theme.warning);
+        }
       }
 
       if (whois.available && verification.confidence === "high") { entry.status = "available"; log(`● AVAIL ${domain} [${verification.confidence}]`, theme.primary); }
@@ -91,10 +102,22 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       else if (whois.available) { entry.status = "available"; log(`● AVAIL ${domain} [${verification.confidence}]`, theme.primary); }
       else { entry.status = "taken"; log(`✕ TAKEN ${domain}`, theme.textDisabled); }
 
+      // New features — run in parallel, don't block on failures
+      const [dns, probe, wayback] = await Promise.all([
+        lookupDns(domain).catch(() => null),
+        httpProbe(domain).catch(() => null),
+        checkWayback(domain).catch(() => null),
+      ]);
+      entry.dns = dns;
+      entry.httpProbe = probe;
+      entry.wayback = wayback;
+      entry.domainAge = calculateDomainAge(entry.whois?.createdDate ?? null);
+
       return entry;
-    } catch (err: any) {
-      entry.status = "error"; entry.error = err.message;
-      log(`ERR ${domain}: ${err.message}`, theme.error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      entry.status = "error"; entry.error = message;
+      log(`ERR ${domain}: ${message}`, theme.error);
       return entry;
     }
   }, [registrarConfig, log]);
@@ -104,11 +127,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     processingRef.current = true;
     setMode("scanning");
 
-    const entries: DomainEntry[] = domainList.map((d) => ({
-      domain: d, status: "pending" as DomainStatus, whois: null,
-      verification: null, registrarCheck: null, registration: null, error: null, tagged: false,
-      dns: null, httpProbe: null, wayback: null, domainAge: null,
-    }));
+    const entries: DomainEntry[] = domainList.map((d) => createEmptyEntry(d));
 
     if (append) {
       setDomains((prev: DomainEntry[]) => [...prev, ...entries]);
@@ -116,36 +135,60 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       setDomains(entries);
     }
 
-    const startIdx = append ? domains.length : 0;
+    const startIdx = append ? domainsCountRef.current : 0;
     log(`━━━ Scanning ${domainList.length} domain${domainList.length > 1 ? "s" : ""} ━━━`, theme.info);
 
-    for (let i = 0; i < entries.length; i++) {
-      const globalIdx = startIdx + i;
-      setDomains((prev: DomainEntry[]) => { const u = [...prev]; if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: "checking" }; return u; });
-      if (!append) setSelectedIndex(i);
-      const result = await processDomain(domainList[i]!);
-      setDomains((prev: DomainEntry[]) => { const u = [...prev]; u[globalIdx] = result; return u; });
+    // Concurrent pool
+    const CONCURRENCY = 5;
+    let nextIdx = 0;
 
-      if (autoRegister && registrarConfig?.apiKey && (result.status === "available" || result.status === "expired")) {
-        setDomains((prev: DomainEntry[]) => { const u = [...prev]; if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: "registering" }; return u; });
-        try {
-          const regResult = await registerDomain(domainList[i]!, registrarConfig);
+    async function worker() {
+      while (nextIdx < entries.length) {
+        const i = nextIdx++;
+        const globalIdx = startIdx + i;
+        setDomains((prev: DomainEntry[]) => {
+          const u = [...prev];
+          if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: "checking" };
+          return u;
+        });
+
+        const result = await processDomain(domainList[i]!);
+        setDomains((prev: DomainEntry[]) => { const u = [...prev]; u[globalIdx] = result; return u; });
+
+        if (autoRegister && registrarConfig?.apiKey && (result.status === "available" || result.status === "expired")) {
           setDomains((prev: DomainEntry[]) => {
             const u = [...prev];
-            if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: regResult.success ? "registered" : u[globalIdx]!.status, registration: regResult };
+            if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: "registering" };
             return u;
           });
-          if (regResult.success) log(`★ REG'd ${domainList[i]}`, theme.secondary);
-        } catch {}
-      }
+          try {
+            const regResult = await registerDomain(domainList[i]!, registrarConfig);
+            setDomains((prev: DomainEntry[]) => {
+              const u = [...prev];
+              if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: regResult.success ? "registered" : u[globalIdx]!.status, registration: regResult };
+              return u;
+            });
+            if (regResult.success) log(`★ REG'd ${domainList[i]}`, theme.secondary);
+          } catch (err: unknown) {
+            log(`REG failed: ${err instanceof Error ? err.message : "unknown"}`, theme.error);
+          }
+        }
 
-      if (i < entries.length - 1) await new Promise((r) => setTimeout(r, 1500));
+        // Rate limit per worker
+        await new Promise((r) => setTimeout(r, 500));
+      }
     }
+
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY, domainList.length) },
+      () => worker()
+    );
+    await Promise.all(workers);
 
     processingRef.current = false;
     setMode("done");
     log("━━━ Scan complete ━━━", theme.info);
-  }, [autoRegister, registrarConfig, processDomain, log, domains.length]);
+  }, [autoRegister, registrarConfig, processDomain, log]);
 
   // ─── Init ───────────────────────────────────────────────
 
@@ -211,7 +254,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       // Register
       else if (key === "r" && selected) {
         if ((selected.status === "available" || selected.status === "expired") && registrarConfig?.apiKey) {
-          handleRegister(domains.indexOf(selected));
+          void handleRegister(domains.indexOf(selected));
         } else if (!registrarConfig?.apiKey) log("No registrar configured", theme.warning);
       }
 
@@ -220,7 +263,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         const tagged = domains.filter((d) => d.tagged && (d.status === "available" || d.status === "expired"));
         if (tagged.length > 0 && registrarConfig?.apiKey) {
           log(`Bulk registering ${tagged.length} domains...`, theme.info);
-          for (const d of tagged) handleRegister(domains.indexOf(d));
+          const registerPromises = tagged.map((d) => handleRegister(domains.indexOf(d)));
+          void Promise.allSettled(registerPromises);
         } else {
           log("Tag domains with SPACE first, then R to bulk register", theme.warning);
         }
@@ -324,12 +368,18 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (!v) return;
 
     if (inputMode === "file") {
-      if (existsSync(v)) {
-        const content = readFileSync(v, "utf-8");
-        const list = parseDomainList(content);
-        if (list.length > 0) { log(`Loaded ${list.length} domains from ${v}`, theme.info); processAllDomains(list); }
-        else log("No valid domains in file", theme.warning);
-      } else { log("File not found: " + v, theme.error); setMode(domains.length > 0 ? "done" : "idle"); }
+      try {
+        const filePath = safePath(v, [process.cwd()]);
+        if (existsSync(filePath)) {
+          const content = readFileSync(filePath, "utf-8");
+          const list = parseDomainList(content);
+          if (list.length > 0) { log(`Loaded ${list.length} domains from ${filePath}`, theme.info); processAllDomains(list); }
+          else log("No valid domains in file", theme.warning);
+        } else { log("File not found: " + filePath, theme.error); setMode(domains.length > 0 ? "done" : "idle"); }
+      } catch (err: unknown) {
+        log(`Path error: ${err instanceof Error ? err.message : "invalid path"}`, theme.error);
+        setMode(domains.length > 0 ? "done" : "idle");
+      }
     } else if (inputMode === "expand") {
       const expanded = expandTlds(v, "popular");
       log(`Expanded "${v}" into ${expanded.length} TLD variants`, theme.info);
@@ -339,7 +389,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       try {
         const path = v.endsWith(".json") ? exportToJSON(domains, v) : exportToCSV(domains, v);
         log(`Exported ${domains.length} domains to ${path}`, theme.primary);
-      } catch (err: any) { log(`Export failed: ${err.message}`, theme.error); }
+      } catch (err: unknown) { log(`Export failed: ${err instanceof Error ? err.message : "unknown"}`, theme.error); }
       setMode("done");
     } else if (inputMode === "load") {
       const session = loadSession(v);
@@ -355,8 +405,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         if (list.length > 0) { log(`Loaded ${list.length} from ${v}`, theme.info); processAllDomains(list, domains.length > 0); }
       } else {
         const list = v.split(/[,\s]+/).map((d: string) => d.trim().toLowerCase()).filter(Boolean);
-        if (list.length > 0) processAllDomains(list, domains.length > 0);
-        else log("No valid domains", theme.warning);
+        const validated = sanitizeDomainList(list);
+        if (validated.length > 0) processAllDomains(validated, domains.length > 0);
+        else log("No valid domains entered", theme.warning);
       }
     }
   };
@@ -550,6 +601,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     <text content={`conf: ${selected.verification.confidence}`} fg={selected.verification.confidence === "high" ? theme.primary : theme.warning} />
                   )}
                   {selected.tagged && <text content="TAGGED" fg={theme.info} />}
+                  {selected.domainAge && (
+                    <text content={`age: ${selected.domainAge}`} fg={theme.textMuted} />
+                  )}
                 </box>
 
                 {/* Score breakdown */}
@@ -572,6 +626,16 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     {selected.whois.registrar && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Registrar", 12)} fg={theme.textMuted} /><text content={selected.whois.registrar} fg={theme.text} /></box>)}
                     {selected.whois.createdDate && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Created", 12)} fg={theme.textMuted} /><text content={selected.whois.createdDate} fg={theme.text} /></box>)}
                     {selected.whois.expiryDate && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Expires", 12)} fg={theme.textMuted} /><text content={selected.whois.expiryDate} fg={selected.whois.expired ? theme.error : theme.text} /></box>)}
+                    {selected.whois.expiryDate && (() => {
+                      const daysLeft = daysUntilExpiry(selected.whois!.expiryDate);
+                      return daysLeft !== null ? (
+                        <box flexDirection="row" gap={1}>
+                          <text content="┃" fg={theme.borderSubtle} />
+                          <text content={pad("Expires in", 12)} fg={theme.textMuted} />
+                          <text content={`${daysLeft}d`} fg={daysLeft < 30 ? theme.error : daysLeft < 90 ? theme.warning : theme.textSecondary} />
+                        </box>
+                      ) : null;
+                    })()}
                     {selected.whois.nameServers.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("NS", 12)} fg={theme.textMuted} /><text content={selected.whois.nameServers.slice(0, 2).join(", ")} fg={theme.textSecondary} /></box>)}
                     <text content="" />
                   </box>
@@ -597,6 +661,48 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     <box flexDirection="row" gap={1}><text content="┃" fg={theme.accent} /><text content="REGISTRAR" fg={theme.accent} /></box>
                     <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Available", 12)} fg={theme.textMuted} /><text content={selected.registrarCheck.available ? "Yes" : "No"} fg={selected.registrarCheck.available ? theme.primary : theme.error} /></box>
                     {selected.registrarCheck.price && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Price", 12)} fg={theme.textMuted} /><text content={`$${selected.registrarCheck.price}`} fg={theme.warning} /></box>)}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* DNS Details */}
+                {selected.dns && (selected.dns.a.length > 0 || selected.dns.mx.length > 0 || selected.dns.txt.length > 0 || selected.dns.cname.length > 0) && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.info} /><text content="DNS RECORDS" fg={theme.info} /></box>
+                    {selected.dns.a.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("A", 12)} fg={theme.textMuted} /><text content={selected.dns.a.join(", ")} fg={theme.text} /></box>)}
+                    {selected.dns.aaaa.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("AAAA", 12)} fg={theme.textMuted} /><text content={selected.dns.aaaa.join(", ")} fg={theme.text} /></box>)}
+                    {selected.dns.mx.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("MX", 12)} fg={theme.textMuted} /><text content={selected.dns.mx.slice(0, 3).join(", ")} fg={theme.text} /></box>)}
+                    {selected.dns.txt.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("TXT", 12)} fg={theme.textMuted} /><text content={selected.dns.txt.slice(0, 2).join(", ")} fg={theme.textSecondary} /></box>)}
+                    {selected.dns.cname.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("CNAME", 12)} fg={theme.textMuted} /><text content={selected.dns.cname.join(", ")} fg={theme.text} /></box>)}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* HTTP Probe */}
+                {selected.httpProbe && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.pending} /><text content="HTTP PROBE" fg={theme.pending} /></box>
+                    {selected.httpProbe.reachable ? (
+                      <>
+                        <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Status", 12)} fg={theme.textMuted} /><text content={`${selected.httpProbe.status}`} fg={selected.httpProbe.status === 200 ? theme.primary : theme.warning} /></box>
+                        {selected.httpProbe.server && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Server", 12)} fg={theme.textMuted} /><text content={selected.httpProbe.server} fg={theme.textSecondary} /></box>)}
+                        {selected.httpProbe.redirectUrl && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Redirect", 12)} fg={theme.textMuted} /><text content={selected.httpProbe.redirectUrl} fg={theme.warning} /></box>)}
+                        {selected.httpProbe.parked && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content="⚠ PARKED DOMAIN" fg={theme.error} /></box>)}
+                      </>
+                    ) : (
+                      <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content="Unreachable" fg={theme.textDisabled} /></box>
+                    )}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Wayback Machine */}
+                {selected.wayback && selected.wayback.hasHistory && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.accent} /><text content="WAYBACK MACHINE" fg={theme.accent} /></box>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Snapshots", 12)} fg={theme.textMuted} /><text content={`~${selected.wayback.snapshots} pages`} fg={theme.text} /></box>
+                    {selected.wayback.firstArchived && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("First", 12)} fg={theme.textMuted} /><text content={selected.wayback.firstArchived} fg={theme.textSecondary} /></box>)}
+                    {selected.wayback.lastArchived && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Last", 12)} fg={theme.textMuted} /><text content={selected.wayback.lastArchived} fg={theme.textSecondary} /></box>)}
                     <text content="" />
                   </box>
                 )}
