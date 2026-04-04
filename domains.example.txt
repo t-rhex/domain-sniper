@@ -1,0 +1,8 @@
+# Domain Sniper - Example domain list
+# One domain per line, lines starting with # are comments
+
+google.com
+example-nonexistent-domain-12345.com
+expired-test-domain.net
+coolstartup.io
+myawesomeapp.dev
