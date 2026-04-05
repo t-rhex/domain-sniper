@@ -29,6 +29,12 @@ import { sendWebhook } from "./features/webhooks.js";
 import { loadConfig } from "./features/config.js";
 import { generateSuggestions } from "./features/domain-suggest.js";
 import { addToPortfolio } from "./features/portfolio.js";
+import { checkSocialMedia, getAvailablePlatforms } from "./features/social-check.js";
+import { detectTechStack } from "./features/tech-stack.js";
+import { checkBlacklists } from "./features/blacklist-check.js";
+import { estimateBacklinks } from "./features/backlinks.js";
+import { saveWhoisSnapshot, getLatestDiff, getHistoryCount } from "./features/whois-history.js";
+import { createDropCatcher, formatDropCatchStatus, type DropCatchStatus } from "./features/drop-catch.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -110,7 +116,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       else { entry.status = "taken"; log(`✕ TAKEN ${domain}`, theme.textDisabled); }
 
       // New features — run in parallel, don't block on failures
-      const [dns, probe, wayback, rdap, ssl, subdomains, marketplace] = await Promise.all([
+      const [dns, probe, wayback, rdap, ssl, subdomains, marketplace, social, techStack, blacklist, backlinks] = await Promise.all([
         lookupDns(domain).catch(() => null),
         httpProbe(domain).catch(() => null),
         checkWayback(domain).catch(() => null),
@@ -118,6 +124,10 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         checkSsl(domain).catch(() => null),
         discoverSubdomains(domain).catch(() => null),
         checkMarketplaces(domain).catch(() => null),
+        checkSocialMedia(domain).catch(() => null),
+        detectTechStack(domain).catch(() => null),
+        checkBlacklists(domain).catch(() => null),
+        estimateBacklinks(domain).catch(() => null),
       ]);
       entry.dns = dns;
       entry.httpProbe = probe;
@@ -126,7 +136,16 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       entry.ssl = ssl;
       entry.subdomains = subdomains;
       entry.marketplace = marketplace;
+      entry.socialMedia = social;
+      entry.techStack = techStack;
+      entry.blacklist = blacklist;
+      entry.backlinks = backlinks;
       entry.domainAge = calculateDomainAge(entry.whois?.createdDate ?? null);
+
+      // Save WHOIS snapshot for history tracking
+      if (entry.whois && !entry.whois.error) {
+        try { saveWhoisSnapshot(entry.whois); } catch {}
+      }
 
       // Send webhook notification if configured
       if ((entry.status === "available" || entry.status === "expired")) {
@@ -359,6 +378,25 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         const suggDomains = suggestions.slice(0, 15).map((s) => s.domain);
         log(`Generated ${suggDomains.length} suggestions from "${name}"`, theme.info);
         if (suggDomains.length > 0) processAllDomains(suggDomains, true);
+      }
+
+      // Drop catch mode
+      else if (key === "D" && selected && registrarConfig?.apiKey) {
+        if (selected.status === "expired" || selected.whois?.expired) {
+          const catcher = createDropCatcher({
+            domain: selected.domain,
+            registrarConfig: registrarConfig!,
+            pollIntervalMs: 30000,
+            maxAttempts: 2880,
+            onStatus: (status: DropCatchStatus) => log(formatDropCatchStatus(status), status.phase === "success" ? theme.primary : status.phase === "failed" ? theme.error : theme.info),
+            onSuccess: (d: string) => log(`DROP CAUGHT: ${d}!`, theme.primary),
+            onFailed: (d: string, err: string) => log(`Drop catch failed for ${d}: ${err}`, theme.error),
+          });
+          catcher.start();
+          log(`Drop catch started for ${selected.domain} (polling every 30s)`, theme.info);
+        } else {
+          log("Drop catch requires an expired domain", theme.warning);
+        }
       }
 
       // Add to portfolio
@@ -620,6 +658,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  R             Bulk register tagged" fg={theme.textSecondary} />
                 <text content="  d             Suggest similar domains" fg={theme.textSecondary} />
                 <text content="  p             Add to portfolio" fg={theme.textSecondary} />
+                <text content="  D             Drop catch (expired only)" fg={theme.textSecondary} />
                 <text content="  w             Watch tagged (1h)" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Filter & Sort" fg={theme.secondary} />
@@ -815,6 +854,86 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     <text content="" />
                   </box>
                 )}
+
+                {/* Social Media */}
+                {selected.socialMedia && selected.socialMedia.length > 0 && (() => {
+                  const avail = selected.socialMedia!.filter((s) => s.available && !s.error);
+                  const taken = selected.socialMedia!.filter((s) => !s.available && !s.error);
+                  return (
+                    <box flexDirection="column" paddingLeft={1}>
+                      <box flexDirection="row" gap={1}><text content="┃" fg={theme.info} /><text content={`SOCIAL MEDIA (${avail.length} avail / ${taken.length} taken)`} fg={theme.info} /></box>
+                      {avail.slice(0, 5).map((s) => (
+                        <box key={s.platform} flexDirection="row" gap={1}>
+                          <text content="┃" fg={theme.borderSubtle} />
+                          <text content="●" fg={theme.primary} />
+                          <text content={s.platform} fg={theme.primary} />
+                        </box>
+                      ))}
+                      {taken.slice(0, 4).map((s) => (
+                        <box key={s.platform} flexDirection="row" gap={1}>
+                          <text content="┃" fg={theme.borderSubtle} />
+                          <text content="✕" fg={theme.textDisabled} />
+                          <text content={s.platform} fg={theme.textDisabled} />
+                        </box>
+                      ))}
+                      <text content="" />
+                    </box>
+                  );
+                })()}
+
+                {/* Tech Stack */}
+                {selected.techStack && selected.techStack.technologies.length > 0 && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.accent} /><text content={`TECH STACK (${selected.techStack.technologies.length})`} fg={theme.accent} /></box>
+                    {selected.techStack.cms && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("CMS", 12)} fg={theme.textMuted} /><text content={selected.techStack.cms} fg={theme.text} /></box>)}
+                    {selected.techStack.framework && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Framework", 12)} fg={theme.textMuted} /><text content={selected.techStack.framework} fg={theme.text} /></box>)}
+                    {selected.techStack.cdn && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("CDN", 12)} fg={theme.textMuted} /><text content={selected.techStack.cdn} fg={theme.text} /></box>)}
+                    {selected.techStack.analytics.length > 0 && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Analytics", 12)} fg={theme.textMuted} /><text content={selected.techStack.analytics.join(", ")} fg={theme.textSecondary} /></box>)}
+                    {selected.techStack.technologies.filter((t) => !["CMS", "Framework", "CDN", "Analytics"].includes(t.category)).slice(0, 4).map((t) => (
+                      <box key={t.name} flexDirection="row" gap={1}>
+                        <text content="┃" fg={theme.borderSubtle} />
+                        <text content={pad(t.category, 12)} fg={theme.textMuted} />
+                        <text content={t.name} fg={theme.textSecondary} />
+                      </box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Blacklist */}
+                {selected.blacklist && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}>
+                      <text content="┃" fg={selected.blacklist.listed ? theme.error : theme.primary} />
+                      <text content={selected.blacklist.listed ? `BLACKLISTED (${selected.blacklist.listedCount})` : `REPUTATION (${selected.blacklist.cleanCount}/${selected.blacklist.lists.length} clean)`} fg={selected.blacklist.listed ? theme.error : theme.primary} />
+                    </box>
+                    {selected.blacklist.listed && selected.blacklist.lists.filter((l) => l.listed).map((l) => (
+                      <box key={l.name} flexDirection="row" gap={1}>
+                        <text content="┃" fg={theme.borderSubtle} />
+                        <text content="⚠" fg={theme.error} />
+                        <text content={l.name} fg={theme.error} />
+                        {l.detail && <text content={l.detail} fg={theme.textDisabled} />}
+                      </box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Backlinks */}
+                {selected.backlinks && (selected.backlinks.pageRank !== null || selected.backlinks.commonCrawlPages !== null) && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.secondary} /><text content="AUTHORITY" fg={theme.secondary} /></box>
+                    {selected.backlinks.pageRank !== null && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("PageRank", 12)} fg={theme.textMuted} /><text content={`${selected.backlinks.pageRank}`} fg={selected.backlinks.pageRank >= 5 ? theme.primary : theme.text} /></box>)}
+                    {selected.backlinks.commonCrawlPages !== null && (<box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("CC Pages", 12)} fg={theme.textMuted} /><text content={`~${selected.backlinks.commonCrawlPages}`} fg={theme.textSecondary} /></box>)}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* WHOIS History */}
+                {(() => {
+                  const histCount = getHistoryCount(selected.domain);
+                  return histCount > 1 ? <text content={`${histCount} snapshots`} fg={theme.textDisabled} /> : null;
+                })()}
 
                 {/* Registration */}
                 {selected.registration && (
