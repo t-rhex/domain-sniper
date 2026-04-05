@@ -1,9 +1,10 @@
 {
   "name": "domain-sniper",
   "version": "2.0.0",
+  "description": "All-in-one domain intelligence toolkit — availability checker, security recon, portfolio manager, and marketplace",
   "module": "src/index.tsx",
   "type": "module",
-  "private": true,
+  "private": false,
   "bin": {
     "domain-sniper": "./src/index.tsx"
   },
@@ -11,9 +12,23 @@
     "start": "bun run src/index.tsx",
     "dev": "bun run --watch src/index.tsx",
     "check": "bun run src/index.tsx",
-    "headless": "bun run src/index.tsx --no-tui",
-    "serve": "bun run src/server/index.ts"
+    "headless": "bun run src/index.tsx --headless",
+    "serve": "bun run src/server/index.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
   },
+  "keywords": [
+    "domain",
+    "whois",
+    "dns",
+    "security",
+    "recon",
+    "pentest",
+    "portfolio",
+    "marketplace",
+    "tui",
+    "cli"
+  ],
   "devDependencies": {
     "@types/bun": "latest"
   },
