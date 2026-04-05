@@ -13,7 +13,7 @@
     "dev": "bun run --watch src/index.tsx",
     "check": "bun run src/index.tsx",
     "headless": "bun run src/index.tsx --headless",
-    "serve": "bun run src/server/index.ts",
+    "serve": "bun run marketplace/index.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },

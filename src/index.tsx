@@ -858,7 +858,7 @@ program
   .option("--port <port>", "Port number", "3000")
   .action(async (opts: { port: string }) => {
     process.env.MARKET_PORT = opts.port;
-    await import("./server/index.js");
+    await import("../marketplace/index.js");
   });
 
 // ─── Market subcommand ─────────────────────────────────
