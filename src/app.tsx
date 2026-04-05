@@ -29,6 +29,11 @@ import { sendWebhook } from "./core/features/webhooks.js";
 import { loadConfig } from "./core/features/config.js";
 import { generateSuggestions } from "./core/features/domain-suggest.js";
 import { addToPortfolio } from "./core/features/portfolio.js";
+import {
+  isLoggedIn, getAuthInfo, browseListings, viewListing,
+  createListingApi, makeOffer, getMyListings, getMyOffers,
+  getMarketStatsApi, getUnreadApi, getServerUrl,
+} from "./market-client.js";
 import { checkSocialMedia, getAvailablePlatforms } from "./core/features/social-check.js";
 import { detectTechStack } from "./core/features/tech-stack.js";
 import { checkBlacklists } from "./core/features/blacklist-check.js";
@@ -94,6 +99,21 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [intelTab, setIntelTab] = useState<IntelTab>("overview");
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number } | null>(null);
   const [confirmBulkRegister, setConfirmBulkRegister] = useState(false);
+
+  // Marketplace state
+  const [showMarket, setShowMarket] = useState(false);
+  const [marketListings, setMarketListings] = useState<any[]>([]);
+  const [marketTotal, setMarketTotal] = useState(0);
+  const [marketSelectedIdx, setMarketSelectedIdx] = useState(0);
+  const [marketSearch, setMarketSearch] = useState("");
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketView, setMarketView] = useState<"browse" | "my-listings" | "my-offers" | "detail">("browse");
+  const [marketDetail, setMarketDetail] = useState<any | null>(null);
+  const [marketUnread, setMarketUnread] = useState(0);
+  const [marketInputMode, setMarketInputMode] = useState<"none" | "search" | "list-price" | "offer-amount" | "offer-message">("none");
+  const [marketInputValue, setMarketInputValue] = useState("");
+  const [marketListDomain, setMarketListDomain] = useState("");
+
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
   const processingRef = useRef(false);
@@ -316,6 +336,57 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     log("━━━ Scan complete ━━━", theme.info);
   }, [autoRegister, registrarConfig, processDomain, log]);
 
+  // ─── Marketplace loaders ────────────────────────────────
+
+  const loadMarketListings = useCallback(async (search?: string) => {
+    setMarketLoading(true);
+    try {
+      const result = await browseListings({ search, limit: 50, sort: "newest" });
+      if (result.ok) {
+        setMarketListings(result.data.listings);
+        setMarketTotal(result.data.total);
+      }
+    } catch {}
+    setMarketLoading(false);
+  }, []);
+
+  const loadMyListings = useCallback(async () => {
+    setMarketLoading(true);
+    try {
+      const result = await getMyListings();
+      if (result.ok) { setMarketListings(result.data); setMarketTotal(result.data.length); }
+    } catch {}
+    setMarketLoading(false);
+  }, []);
+
+  const loadMyOffers = useCallback(async () => {
+    setMarketLoading(true);
+    try {
+      const result = await getMyOffers("buyer");
+      const result2 = await getMyOffers("seller");
+      if (result.ok && result2.ok) {
+        const all = [...result.data, ...result2.data];
+        setMarketListings(all);
+        setMarketTotal(all.length);
+      }
+    } catch {}
+    setMarketLoading(false);
+  }, []);
+
+  // Check unread count periodically
+  useEffect(() => {
+    if (!isLoggedIn()) return;
+    const checkUnread = async () => {
+      try {
+        const r = await getUnreadApi();
+        if (r.ok) setMarketUnread(r.data.count);
+      } catch {}
+    };
+    checkUnread();
+    const interval = setInterval(checkUnread, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   // ─── Init ───────────────────────────────────────────────
 
   useEffect(() => {
@@ -350,6 +421,108 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     // Toggle portfolio dashboard
     if (key === "P" && mode !== "input") { setShowPortfolio((v) => !v); return; }
     if (showPortfolio && key === "escape") { setShowPortfolio(false); return; }
+
+    // ── Marketplace toggle ──
+    if (key === "M" && mode !== "input" && !showPortfolio) {
+      if (!showMarket) {
+        setShowMarket(true);
+        setMarketView("browse");
+        setMarketSelectedIdx(0);
+        void loadMarketListings();
+      } else {
+        setShowMarket(false);
+        setMarketInputMode("none");
+      }
+      return;
+    }
+
+    // ── Marketplace keyboard controls (when market is open) ──
+    if (showMarket) {
+      // Close marketplace
+      if (key === "escape") {
+        if (marketInputMode !== "none") {
+          setMarketInputMode("none");
+          setMode(domains.length > 0 ? "done" : "idle");
+        } else if (marketView === "detail") {
+          setMarketView("browse");
+          setMarketDetail(null);
+        } else {
+          setShowMarket(false);
+        }
+        return;
+      }
+
+      // Marketplace input mode
+      if (marketInputMode !== "none") {
+        return; // Let the input component handle it
+      }
+
+      // Navigation
+      if (key === "up" || key === "k") { setMarketSelectedIdx((i) => Math.max(0, i - 1)); return; }
+      if (key === "down" || key === "j") { setMarketSelectedIdx((i) => Math.min(marketListings.length - 1, i + 1)); return; }
+
+      // View listing detail
+      if (key === "return" && marketListings[marketSelectedIdx]) {
+        const item = marketListings[marketSelectedIdx];
+        if (marketView === "browse" && item.id) {
+          setMarketLoading(true);
+          viewListing(item.id).then((r) => {
+            if (r.ok) { setMarketDetail(r.data); setMarketView("detail"); }
+            setMarketLoading(false);
+          });
+        }
+        return;
+      }
+
+      // Search
+      if (key === "/" && marketView === "browse") {
+        setMarketInputMode("search");
+        setMarketInputValue(marketSearch);
+        setMode("input");
+        setInputValue("");
+        return;
+      }
+
+      // Switch views
+      if (key === "1") { setMarketView("browse"); setMarketSelectedIdx(0); void loadMarketListings(marketSearch); return; }
+      if (key === "2" && isLoggedIn()) { setMarketView("my-listings"); setMarketSelectedIdx(0); void loadMyListings(); return; }
+      if (key === "3" && isLoggedIn()) { setMarketView("my-offers"); setMarketSelectedIdx(0); void loadMyOffers(); return; }
+
+      // List selected domain for sale (from scan results)
+      if (key === "l" && selected && isLoggedIn() && marketView !== "detail") {
+        setMarketListDomain(selected.domain);
+        setMarketInputMode("list-price");
+        setMode("input");
+        setInputValue("");
+        log(`Enter asking price for ${selected.domain}`, theme.info);
+        return;
+      }
+
+      // Make offer on selected listing
+      if (key === "o" && marketView === "detail" && marketDetail && isLoggedIn()) {
+        setMarketInputMode("offer-amount");
+        setMode("input");
+        setInputValue("");
+        return;
+      }
+
+      // Back from detail
+      if (key === "backspace" && marketView === "detail") {
+        setMarketView("browse");
+        setMarketDetail(null);
+        return;
+      }
+
+      // Refresh
+      if (key === "r") {
+        if (marketView === "browse") void loadMarketListings(marketSearch);
+        else if (marketView === "my-listings") void loadMyListings();
+        else if (marketView === "my-offers") void loadMyOffers();
+        return;
+      }
+
+      return; // Consume all other keys while market is open
+    }
 
     // ── Tab switching for INTEL panel (Issue 1) ──
     if (key === "tab" && mode !== "input") {
@@ -606,6 +779,49 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     const v = value.trim();
     if (!v) return;
 
+    // Marketplace inputs
+    if (marketInputMode === "search") {
+      setMarketSearch(v);
+      setMarketInputMode("none");
+      setMarketSelectedIdx(0);
+      void loadMarketListings(v);
+      setMode(domains.length > 0 ? "done" : "idle");
+      return;
+    }
+    if (marketInputMode === "list-price") {
+      const price = parseFloat(v);
+      if (isNaN(price) || price <= 0) { log("Invalid price", theme.error); setMarketInputMode("none"); setMode(domains.length > 0 ? "done" : "idle"); return; }
+      setMarketInputMode("none");
+      setMode(domains.length > 0 ? "done" : "idle");
+      createListingApi(marketListDomain, price, { title: marketListDomain }).then((r) => {
+        if (r.ok) {
+          log(`Listed ${marketListDomain} for $${price} — verify ownership to activate`, theme.primary);
+          if (r.data.verification) {
+            log(`DNS: Add TXT record domain-sniper-verify=${r.data.verification.token}`, theme.textMuted);
+          }
+        } else {
+          log(`Failed to list: ${r.data?.error || "unknown error"}`, theme.error);
+        }
+      });
+      return;
+    }
+    if (marketInputMode === "offer-amount") {
+      const amount = parseFloat(v);
+      if (isNaN(amount) || amount <= 0) { log("Invalid amount", theme.error); setMarketInputMode("none"); setMode(domains.length > 0 ? "done" : "idle"); return; }
+      setMarketInputMode("none");
+      setMode(domains.length > 0 ? "done" : "idle");
+      if (marketDetail?.listing) {
+        makeOffer(marketDetail.listing.id, amount).then((r) => {
+          if (r.ok) {
+            log(`Offer of $${amount} submitted on ${marketDetail.listing.domain}`, theme.primary);
+          } else {
+            log(`Offer failed: ${r.data?.error || "unknown"}`, theme.error);
+          }
+        });
+      }
+      return;
+    }
+
     if (inputMode === "file") {
       try {
         const filePath = safePath(v, [process.cwd()]);
@@ -688,8 +904,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const dLine = (w: number) => "═".repeat(Math.max(1, w - 2));
   const logPanelH = Math.max(4, Math.floor((height - 5) * 0.28));
 
-  const inputLabel = inputMode === "file" ? "FILE" : inputMode === "expand" ? "EXPAND" : inputMode === "export" ? "EXPORT" : inputMode === "load" ? "LOAD" : "SCAN";
-  const inputPlaceholder = inputMode === "file" ? "/path/to/domains.txt" : inputMode === "expand" ? "coolstartup" : inputMode === "export" ? "results.csv or results.json" : inputMode === "load" ? "session-id or path" : "domains or /path/to/file";
+  const inputLabel = marketInputMode === "search" ? "SEARCH" : marketInputMode === "list-price" ? "PRICE" : marketInputMode === "offer-amount" ? "OFFER" : inputMode === "file" ? "FILE" : inputMode === "expand" ? "EXPAND" : inputMode === "export" ? "EXPORT" : inputMode === "load" ? "LOAD" : "SCAN";
+  const inputPlaceholder = marketInputMode === "search" ? "Search domains..." : marketInputMode === "list-price" ? `Asking price for ${marketListDomain}` : marketInputMode === "offer-amount" ? "Your offer amount" : inputMode === "file" ? "/path/to/domains.txt" : inputMode === "expand" ? "coolstartup" : inputMode === "export" ? "results.csv or results.json" : inputMode === "load" ? "session-id or path" : "domains or /path/to/file";
 
   // ─── Render ─────────────────────────────────────────────
 
@@ -733,6 +949,12 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
             ) : (
               <text content="○ whois" fg={theme.textDisabled} />
             )}
+            {isLoggedIn() && (
+              <box flexDirection="row" gap={1}>
+                <text content={`◆ market`} fg={theme.secondary} />
+                {marketUnread > 0 && <text content={`✉${marketUnread}`} fg={theme.warning} />}
+              </box>
+            )}
           </box>
         </box>
         <text content={dLine(width)} fg={theme.border} paddingLeft={1} />
@@ -740,7 +962,111 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
 
       {/* ═══ BODY ═══ */}
       <box flexGrow={1} flexDirection="row" minHeight={0}>
-      {showPortfolio ? (
+      {showMarket ? (
+        <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1} minHeight={0}>
+          {/* Marketplace header */}
+          <box flexDirection="row" gap={2} flexShrink={0} paddingLeft={1}>
+            <box backgroundColor={theme.secondary}><text content=" MARKETPLACE " fg={theme.background} /></box>
+            {(["browse", "my-listings", "my-offers"] as const).map((v, i) => (
+              <box key={v} backgroundColor={marketView === v ? theme.secondaryDim : "transparent"}>
+                <text content={` ${i + 1}:${v === "browse" ? "Browse" : v === "my-listings" ? "My Listings" : "My Offers"} `} fg={marketView === v ? theme.secondary : theme.textDisabled} />
+              </box>
+            ))}
+            {isLoggedIn() ? (
+              <text content={`● ${getAuthInfo()?.name || "user"}`} fg={theme.primary} />
+            ) : (
+              <text content="○ not signed in (use CLI: market login)" fg={theme.textDisabled} />
+            )}
+            {marketUnread > 0 && <text content={`✉ ${marketUnread}`} fg={theme.warning} />}
+            <box flexGrow={1} />
+            <text content="(M to close)" fg={theme.textDisabled} />
+          </box>
+          <text content={hLine(width)} fg={theme.borderSubtle} paddingLeft={1} />
+
+          {marketView === "detail" && marketDetail ? (
+            /* Detail view */
+            <scrollbox flexGrow={1} paddingLeft={2} minHeight={0} scrollbarOptions={{ visible: true }}>
+              <box flexDirection="column" gap={0} paddingTop={1}>
+                <box flexDirection="row" gap={2}>
+                  <text content={marketDetail.listing.domain} fg={theme.text} />
+                  <text content={`$${marketDetail.listing.asking_price}`} fg={theme.warning} />
+                  <text content={marketDetail.listing.verified ? "✓ verified" : "unverified"} fg={marketDetail.listing.verified ? theme.primary : theme.textDisabled} />
+                  <text content={marketDetail.listing.status} fg={theme.textMuted} />
+                </box>
+                <text content="" />
+                {marketDetail.listing.title && <text content={marketDetail.listing.title} fg={theme.textSecondary} />}
+                {marketDetail.listing.description && <text content={marketDetail.listing.description} fg={theme.textMuted} />}
+                <text content="" />
+                <box flexDirection="row" gap={2}>
+                  <text content={`Category: ${marketDetail.listing.category}`} fg={theme.textDisabled} />
+                  <text content={`Views: ${marketDetail.listing.views}`} fg={theme.textDisabled} />
+                  <text content={`Offers: ${marketDetail.offerCount}`} fg={theme.textDisabled} />
+                </box>
+                {marketDetail.listing.min_offer > 0 && <text content={`Min offer: $${marketDetail.listing.min_offer}`} fg={theme.textMuted} />}
+                {marketDetail.listing.buy_now ? <text content="Buy Now enabled" fg={theme.primary} /> : null}
+                <text content="" />
+                <text content={`Listed: ${marketDetail.listing.created_at}`} fg={theme.textDisabled} />
+                <text content="" />
+                {isLoggedIn() && <text content="Press 'o' to make an offer, Backspace to go back" fg={theme.textMuted} />}
+                {!isLoggedIn() && <text content="Sign in via CLI to make offers: domain-sniper market login" fg={theme.textMuted} />}
+              </box>
+            </scrollbox>
+          ) : (
+            /* List view */
+            <box flexGrow={1} flexDirection="row" minHeight={0}>
+              {/* Listing list */}
+              <box flexGrow={1} flexDirection="column" minHeight={0}>
+                <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
+                  <text content={`${marketView === "browse" ? "All Listings" : marketView === "my-listings" ? "My Listings" : "My Offers"} (${marketTotal})`} fg={theme.secondary} />
+                  {marketLoading && <text content="loading..." fg={theme.warning} />}
+                  {marketSearch && marketView === "browse" && <text content={`search: "${marketSearch}"`} fg={theme.textMuted} />}
+                </box>
+                <text content={hLine(width)} fg={theme.borderSubtle} paddingLeft={1} />
+
+                {marketListings.length > 0 ? (
+                  <scrollbox flexGrow={1} paddingLeft={1} minHeight={0} scrollbarOptions={{ visible: true }}>
+                    {marketListings.map((item: any, i: number) => {
+                      const active = marketSelectedIdx === i;
+                      const domain = item.domain || "—";
+                      const price = item.asking_price ?? item.amount ?? 0;
+                      const status = item.status || "—";
+                      const verified = item.verified ? "✓" : " ";
+                      return (
+                        <box key={item.id || i} flexDirection="row" backgroundColor={active ? theme.secondaryDim : "transparent"} paddingLeft={1} gap={1}>
+                          <text content={verified} fg={theme.primary} />
+                          <text content={pad(domain, 28)} fg={active ? theme.text : theme.textSecondary} />
+                          <text content={`$${price}`} fg={theme.warning} />
+                          <box flexGrow={1} />
+                          <text content={status} fg={status === "active" ? theme.primary : status === "pending" ? theme.warning : theme.textDisabled} />
+                        </box>
+                      );
+                    })}
+                  </scrollbox>
+                ) : (
+                  <box flexGrow={1} alignItems="center" justifyContent="center" minHeight={0}>
+                    <text content={marketLoading ? "Loading..." : "No listings found"} fg={theme.textDisabled} />
+                  </box>
+                )}
+              </box>
+            </box>
+          )}
+
+          {/* Marketplace footer hints */}
+          <text content={dLine(width)} fg={theme.border} paddingLeft={1} />
+          <box flexDirection="row" paddingLeft={1} paddingRight={1} flexShrink={0}>
+            <box flexDirection="row" gap={1}>
+              <box backgroundColor={theme.textDisabled}><text content=" 1 " fg={theme.background} /></box><text content="browse" fg={theme.textMuted} />
+              {isLoggedIn() && (<><box backgroundColor={theme.textDisabled}><text content=" 2 " fg={theme.background} /></box><text content="mine" fg={theme.textMuted} /></>)}
+              {isLoggedIn() && (<><box backgroundColor={theme.textDisabled}><text content=" 3 " fg={theme.background} /></box><text content="offers" fg={theme.textMuted} /></>)}
+              <box backgroundColor={theme.textDisabled}><text content=" / " fg={theme.background} /></box><text content="search" fg={theme.textMuted} />
+              <box backgroundColor={theme.textDisabled}><text content=" ⏎ " fg={theme.background} /></box><text content="view" fg={theme.textMuted} />
+              {isLoggedIn() && selected && (<><box backgroundColor={theme.textDisabled}><text content=" l " fg={theme.background} /></box><text content="list domain" fg={theme.textMuted} /></>)}
+              <box backgroundColor={theme.textDisabled}><text content=" r " fg={theme.background} /></box><text content="refresh" fg={theme.textMuted} />
+              <box backgroundColor={theme.textDisabled}><text content=" M " fg={theme.background} /></box><text content="close" fg={theme.textMuted} />
+            </box>
+          </box>
+        </box>
+      ) : showPortfolio ? (
         <box flexGrow={1} flexDirection="column" paddingLeft={2} paddingRight={2} minHeight={0}>
           <scrollbox flexGrow={1} minHeight={0} scrollbarOptions={{ visible: true }}>
             {(() => {
@@ -979,6 +1305,15 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="                Enables port scan, WAF, headers," fg={theme.textDisabled} />
                 <text content="                CORS, zone transfer, takeover detect" fg={theme.textDisabled} />
                 <text content="                (rescan required after toggling)" fg={theme.textDisabled} />
+                <text content="" />
+                <text content="Marketplace" fg={theme.secondary} />
+                <text content="  M             Open/close marketplace" fg={theme.textSecondary} />
+                <text content="  /             Search listings (in marketplace)" fg={theme.textSecondary} />
+                <text content="  1 2 3         Switch: Browse / My Listings / My Offers" fg={theme.textSecondary} />
+                <text content="  Enter         View listing details" fg={theme.textSecondary} />
+                <text content="  l             List selected domain for sale" fg={theme.textSecondary} />
+                <text content="  o             Make offer (in detail view)" fg={theme.textSecondary} />
+                <text content="  r             Refresh listings" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Portfolio" fg={theme.secondary} />
                 <text content="  P             Portfolio dashboard" fg={theme.textSecondary} />
@@ -1482,7 +1817,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       </box>
 
       {/* ═══ INPUT BAR ═══ */}
-      {mode === "input" && (
+      {(mode === "input" || marketInputMode !== "none") && (
         <box flexShrink={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={theme.backgroundPanel} gap={1}>
           <box backgroundColor={theme.info}><text content={` ${inputLabel} `} fg={theme.background} /></box>
           <input
@@ -1510,12 +1845,13 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   { key: "␣", label: "tag", priority: 2 },
                   { key: "?", label: "help", priority: 3 },
                   { key: "n", label: reconMode ? "recon:ON" : "recon", priority: 4 },
-                  { key: "e", label: "expand", priority: 5 },
-                  { key: "Tab", label: "tabs", priority: 6 },
-                  ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 7 }] : []),
-                  { key: "d", label: "suggest", priority: 8 },
-                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 9 },
-                  { key: "p", label: "portfolio", priority: 10 },
+                  { key: "M", label: "market", priority: 5 },
+                  { key: "e", label: "expand", priority: 6 },
+                  { key: "Tab", label: "tabs", priority: 7 },
+                  ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 8 }] : []),
+                  { key: "d", label: "suggest", priority: 9 },
+                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 10 },
+                  { key: "p", label: "portfolio", priority: 11 },
                 ];
                 const maxHints = Math.floor((width - 20) / 10);
                 const visibleHints = footerHints.slice(0, maxHints);
@@ -1524,7 +1860,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     {visibleHints.map((h) => (
                       <box key={h.key} flexDirection="row" gap={0}>
                         <box backgroundColor={theme.textDisabled}><text content={` ${h.key} `} fg={theme.background} /></box>
-                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "P" && showPortfolio ? theme.primary : theme.textMuted} />
+                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "P" && showPortfolio ? theme.primary : h.key === "M" && showMarket ? theme.secondary : theme.textMuted} />
                       </box>
                     ))}
                   </>
