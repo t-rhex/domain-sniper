@@ -9,11 +9,19 @@ import type { RdapResult } from "./features/rdap.js";
 import type { SslResult } from "./features/ssl-check.js";
 import type { SubdomainResult } from "./features/subdomain-discovery.js";
 import type { MarketplaceListing } from "./features/marketplace.js";
+import type { SocialCheckResult } from "./features/social-check.js";
+import type { TechStackResult } from "./features/tech-stack.js";
+import type { BlacklistResult } from "./features/blacklist-check.js";
+import type { BacklinkResult } from "./features/backlinks.js";
 
 export type { RdapResult } from "./features/rdap.js";
 export type { SslResult } from "./features/ssl-check.js";
 export type { SubdomainResult } from "./features/subdomain-discovery.js";
 export type { MarketplaceListing } from "./features/marketplace.js";
+export type { SocialCheckResult } from "./features/social-check.js";
+export type { TechStackResult } from "./features/tech-stack.js";
+export type { BlacklistResult } from "./features/blacklist-check.js";
+export type { BacklinkResult } from "./features/backlinks.js";
 
 export interface DnsDetails {
   a: string[];
@@ -56,6 +64,10 @@ export interface DomainEntry {
   ssl: SslResult | null;
   subdomains: SubdomainResult[] | null;
   marketplace: MarketplaceListing[] | null;
+  socialMedia: SocialCheckResult[] | null;
+  techStack: TechStackResult | null;
+  blacklist: BlacklistResult | null;
+  backlinks: BacklinkResult | null;
 }
 
 /**
@@ -79,5 +91,9 @@ export function createEmptyEntry(domain: string): DomainEntry {
     ssl: null,
     subdomains: null,
     marketplace: null,
+    socialMedia: null,
+    techStack: null,
+    blacklist: null,
+    backlinks: null,
   };
 }
