@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { verifyListing, getListing } from "./db.js";
+import { assertValidDomain } from "../src/core/validate.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,10 +47,25 @@ export async function verifyDomainOwnership(
       error: null,
     };
 
+  // Validate domain before any network calls (SSRF prevention)
+  try {
+    assertValidDomain(listing.domain);
+  } catch {
+    return { verified: false, method: null, error: "Invalid domain format" };
+  }
+
   const token = listing.verification_token;
   const domain = listing.domain;
   if (!token)
     return { verified: false, method: null, error: "No verification token" };
+
+  // Check token expiry
+  if (listing.verification_expires) {
+    const expiresAt = new Date(listing.verification_expires);
+    if (expiresAt < new Date()) {
+      return { verified: false, method: null, error: "Verification token expired. Create a new listing." };
+    }
+  }
 
   // Method 1: DNS TXT record
   try {

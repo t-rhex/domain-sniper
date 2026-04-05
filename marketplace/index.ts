@@ -1,6 +1,7 @@
 import { auth, migrateAuth } from "./auth.js";
 import { checkRateLimit, cacheGet, cacheSet, getRedis, isRedisAvailable } from "./redis.js";
 import { isPostgresEnabled } from "./pg.js";
+import { isValidDomain } from "../src/core/validate.js";
 
 // Run auth migrations before starting server
 await migrateAuth();
@@ -111,6 +112,18 @@ function sanitize(input: string): string {
     .replace(/'/g, "&#x27;")
     .slice(0, 5000); // Max 5KB per field
 }
+
+// ─── Price / amount validation ──────────────────────────
+
+function isValidPrice(value: unknown): value is number {
+  return typeof value === "number" && isFinite(value) && value > 0;
+}
+
+// ─── Status transition allowlists ───────────────────────
+
+const USER_SETTABLE_LISTING_STATUSES: string[] = ["cancelled"];
+const VALID_OFFER_STATUSES_SELLER: string[] = ["accepted", "rejected", "countered"];
+const VALID_OFFER_STATUSES_BUYER: string[] = ["withdrawn"];
 
 // ─── Rate Limiting (Redis-backed, in-memory fallback) ───
 
@@ -302,8 +315,17 @@ Bun.serve({
       };
       if (!body.domain || !body.askingPrice)
         return json({ error: "domain and askingPrice required" }, 400, req);
+      if (!isValidDomain(body.domain)) {
+        return json({ error: "Invalid domain format" }, 400, req);
+      }
+      if (!isValidPrice(body.askingPrice)) {
+        return json({ error: "askingPrice must be a positive number" }, 400, req);
+      }
+      if (body.minOffer !== undefined && (typeof body.minOffer !== "number" || !isFinite(body.minOffer) || body.minOffer < 0)) {
+        return json({ error: "minOffer must be a non-negative number" }, 400, req);
+      }
 
-      const safeDomain = body.domain; // Domain is already validated by createListing
+      const safeDomain = body.domain;
       const safeTitle = body.title ? sanitize(body.title) : undefined;
       const safeDescription = body.description ? sanitize(body.description) : undefined;
       const safeCategory = body.category ? sanitize(body.category) : undefined;
@@ -354,8 +376,12 @@ Bun.serve({
         return json({ error: "Not your listing" }, 403, req);
 
       const body = (await req.json()) as { status?: string };
-      if (body.status)
+      if (body.status) {
+        if (!USER_SETTABLE_LISTING_STATUSES.includes(body.status)) {
+          return json({ error: `Invalid status. Allowed: ${USER_SETTABLE_LISTING_STATUSES.join(", ")}` }, 400, req);
+        }
         updateListingStatus(id, body.status as ListingStatus);
+      }
       return json(getListing(id), 200, req);
     }
 
@@ -399,6 +425,9 @@ Bun.serve({
       };
       if (!body.listingId || !body.amount)
         return json({ error: "listingId and amount required" }, 400, req);
+      if (!isValidPrice(body.amount)) {
+        return json({ error: "amount must be a positive number" }, 400, req);
+      }
 
       const listing = getListing(body.listingId);
       if (!listing) return json({ error: "Listing not found" }, 404, req);
@@ -437,23 +466,20 @@ Bun.serve({
         counterAmount?: number;
       };
 
-      // Only seller can accept/reject/counter
-      if (
-        ["accepted", "rejected", "countered"].includes(body.status) &&
-        offer.seller_id !== session.user.id
-      ) {
-        return json(
-          { error: "Only the seller can accept/reject/counter" },
-          403,
-          req,
-        );
+      // Determine allowed statuses based on role
+      const allowedStatuses = offer.seller_id === session.user.id
+        ? VALID_OFFER_STATUSES_SELLER
+        : offer.buyer_id === session.user.id
+        ? VALID_OFFER_STATUSES_BUYER
+        : [];
+
+      if (!allowedStatuses.includes(body.status)) {
+        return json({ error: `Invalid status. Allowed: ${allowedStatuses.join(", ")}` }, 400, req);
       }
-      // Only buyer can withdraw
-      if (
-        body.status === "withdrawn" &&
-        offer.buyer_id !== session.user.id
-      ) {
-        return json({ error: "Only the buyer can withdraw" }, 403, req);
+
+      // Validate counterAmount if provided
+      if (body.counterAmount !== undefined && !isValidPrice(body.counterAmount)) {
+        return json({ error: "counterAmount must be a positive number" }, 400, req);
       }
 
       updateOfferStatus(

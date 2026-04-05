@@ -2,9 +2,20 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { isPostgresEnabled, initPostgres } from "./pg.js";
+import { isValidDomain } from "../src/core/validate.js";
 
 const APP_DIR = process.env.DATA_DIR || join(homedir(), ".domain-sniper");
 const MARKET_DB_FILE = join(APP_DIR, "marketplace.db");
+
+// Initialize Postgres tables alongside SQLite when DATABASE_URL is set.
+// SQLite remains the active query engine for now; Postgres schema is kept
+// in sync so a full query migration can happen incrementally.
+if (isPostgresEnabled()) {
+  initPostgres().catch((err: unknown) => {
+    console.error("Postgres init failed, continuing with SQLite:", err);
+  });
+}
 
 let _db: Database | null = null;
 
@@ -262,6 +273,7 @@ export function createListing(
     tags?: string[];
   } = {},
 ): number {
+  if (!isValidDomain(domain)) throw new Error(`Invalid domain: ${domain}`);
   const db = getMarketDb();
   const token = crypto.randomUUID();
   const result = db.run(
