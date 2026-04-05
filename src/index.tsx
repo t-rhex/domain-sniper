@@ -1301,6 +1301,140 @@ proxy
     console.log(getInstallInstructions());
   });
 
+// ─── Snipe subcommand ──────────────────────────────────
+
+const snipeCmd = program
+  .command("snipe")
+  .description("Snipe domains — automatically watch, detect expiry, and register");
+
+snipeCmd
+  .command("add <domain>")
+  .description("Add a domain to snipe list")
+  .option("--max-price <price>", "Maximum price to pay")
+  .action(async (domain: string, opts: { maxPrice?: string }) => {
+    const { snipeDomain } = await import("./core/features/snipe.js");
+    const { whoisLookup } = await import("./core/whois.js");
+
+    console.log(`\nChecking ${domain}...`);
+    const whois = await whoisLookup(domain);
+
+    snipeDomain(domain, {
+      expiryDate: whois.expiryDate || undefined,
+      maxPrice: opts.maxPrice ? parseFloat(opts.maxPrice) : undefined,
+    });
+
+    if (whois.available) {
+      console.log(`  ${domain} is ALREADY AVAILABLE — consider registering now!`);
+      console.log(`  Use: domain-sniper snipe run\n`);
+    } else if (whois.expired) {
+      console.log(`  ${domain} is EXPIRED — snipe engine will monitor and register when it drops`);
+      if (whois.expiryDate) console.log(`  Expiry: ${whois.expiryDate}`);
+    } else {
+      console.log(`  ${domain} is currently registered`);
+      if (whois.expiryDate) {
+        const daysLeft = Math.floor((new Date(whois.expiryDate).getTime() - Date.now()) / 86400000);
+        console.log(`  Expires: ${whois.expiryDate} (${daysLeft} days)`);
+      }
+      console.log(`  Snipe engine will watch for expiry and auto-register when it drops`);
+    }
+    console.log(`\nStart the snipe engine: domain-sniper snipe run\n`);
+  });
+
+snipeCmd
+  .command("remove <domain>")
+  .description("Remove a domain from snipe list")
+  .action(async (domain: string) => {
+    const { cancelSnipe } = await import("./core/features/snipe.js");
+    cancelSnipe(domain);
+    console.log(`Removed ${domain} from snipe list`);
+  });
+
+snipeCmd
+  .command("list")
+  .description("Show all snipe targets")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const { getSnipeTargets } = await import("./core/features/snipe.js");
+    const { getSnipeStats } = await import("./core/db.js");
+    const targets = getSnipeTargets();
+    const stats = getSnipeStats();
+
+    if (opts.json) { console.log(JSON.stringify({ targets, stats }, null, 2)); return; }
+
+    console.log(`\nSnipe Targets (${stats.total} total — ${stats.watching} watching, ${stats.expiring} expiring, ${stats.dropping} dropping, ${stats.registered} registered):\n`);
+    if (targets.length === 0) { console.log("  No active snipe targets. Add one: domain-sniper snipe add example.com\n"); return; }
+
+    console.log(`  ${"DOMAIN".padEnd(30)} ${"STATUS".padEnd(12)} ${"PHASE".padEnd(12)} ${"CHECKS".padEnd(8)} LAST CHECK`);
+    console.log(`  ${"─".repeat(30)} ${"─".repeat(12)} ${"─".repeat(12)} ${"─".repeat(8)} ${"─".repeat(20)}`);
+    for (const t of targets) {
+      const statusColor = t.status === "dropping" ? "\x1b[31m" : t.status === "expiring" ? "\x1b[33m" : "\x1b[90m";
+      console.log(`  ${t.domain.padEnd(30)} ${statusColor}${t.status.padEnd(12)}\x1b[0m ${t.phase.padEnd(12)} ${String(t.checkCount).padEnd(8)} ${t.lastChecked || "never"}`);
+    }
+    console.log();
+  });
+
+snipeCmd
+  .command("run")
+  .description("Start the snipe engine (runs in foreground)")
+  .action(async () => {
+    const { createSnipeEngine, getSnipeTargets } = await import("./core/features/snipe.js");
+    const targets = getSnipeTargets();
+
+    if (targets.length === 0) {
+      console.error("No snipe targets. Add one first: domain-sniper snipe add example.com");
+      process.exit(1);
+    }
+
+    console.log(`\n◆ Snipe Engine Starting — ${targets.length} target(s)\n`);
+    for (const t of targets) {
+      console.log(`  ${t.domain.padEnd(30)} ${t.status.padEnd(12)} ${t.phase}`);
+    }
+    console.log(`\nPhases: hourly (registered) → frequent/5min (expired) → aggressive/30s (pending delete)`);
+    console.log("Press Ctrl+C to stop\n");
+
+    const engine = createSnipeEngine({
+      onStatusChange: (domain, status, phase, message) => {
+        const ts = new Date().toISOString().slice(11, 19);
+        const color = status === "registered" ? "\x1b[32m" : status === "dropping" ? "\x1b[31m" : status === "expiring" ? "\x1b[33m" : "\x1b[90m";
+        console.log(`  ${ts} ${color}[${status}/${phase}]\x1b[0m ${message}`);
+      },
+      onRegistered: (domain) => {
+        console.log(`\n  ★ SUCCESS — ${domain} has been REGISTERED!\n`);
+      },
+      onFailed: (domain, error) => {
+        console.log(`\n  ✗ FAILED — ${domain}: ${error}\n`);
+      },
+    });
+
+    await engine.start();
+
+    // Keep running
+    process.on("SIGINT", () => {
+      console.log("\nStopping snipe engine...");
+      engine.stop();
+      process.exit(0);
+    });
+  });
+
+snipeCmd
+  .command("stats")
+  .description("Show snipe statistics")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const { getSnipeStats, getAllSnipes } = await import("./core/db.js");
+    const stats = getSnipeStats();
+    const all = getAllSnipes();
+    if (opts.json) { console.log(JSON.stringify({ stats, snipes: all }, null, 2)); return; }
+
+    console.log(`\nSnipe Stats:`);
+    console.log(`  Watching:    ${stats.watching}`);
+    console.log(`  Expiring:    ${stats.expiring}`);
+    console.log(`  Dropping:    ${stats.dropping}`);
+    console.log(`  Registered:  ${stats.registered}`);
+    console.log(`  Failed:      ${stats.failed}`);
+    console.log(`  Total:       ${stats.total}\n`);
+  });
+
 program.parse();
 
 // ─── Types ───────────────────────────────────────────────
