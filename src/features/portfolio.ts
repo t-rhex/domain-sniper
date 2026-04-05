@@ -1,8 +1,15 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { isValidDomain } from "../validate.js";
-import { APP_DIR, PORTFOLIO_FILE } from "../paths.js";
+/**
+ * Portfolio management — SQLite-backed domain portfolio tracking
+ */
 
-const PORTFOLIO_DIR = APP_DIR;
+import {
+  addPortfolioDomain as dbAddPortfolio,
+  removePortfolioDomain as dbRemovePortfolio,
+  getPortfolioDomains,
+  getPortfolioExpiring,
+  getPortfolioStatsDb,
+} from "../db.js";
+import { isValidDomain } from "../validate.js";
 
 export interface PortfolioDomain {
   domain: string;
@@ -24,36 +31,32 @@ export interface Portfolio {
   currency: string;
 }
 
-function ensureDir(): void {
-  if (!existsSync(PORTFOLIO_DIR)) {
-    mkdirSync(PORTFOLIO_DIR, { recursive: true });
-  }
+function dbRowToPortfolioDomain(row: any): PortfolioDomain {
+  return {
+    domain: row.domain,
+    registrar: row.registrar || "unknown",
+    purchaseDate: row.purchase_date || "",
+    expiryDate: row.expiry_date || "",
+    purchasePrice: row.purchase_price || 0,
+    renewalPrice: row.renewal_price || 0,
+    currency: row.currency || "USD",
+    autoRenew: !!row.auto_renew,
+    tags: (() => { try { return JSON.parse(row.tags || "[]"); } catch { return []; } })(),
+    notes: row.notes || "",
+    addedAt: row.added_at || "",
+  };
 }
 
 export function loadPortfolio(): Portfolio {
-  ensureDir();
-  if (!existsSync(PORTFOLIO_FILE)) {
-    return { domains: [], totalSpent: 0, currency: "USD" };
-  }
-  try {
-    const content = readFileSync(PORTFOLIO_FILE, "utf-8");
-    const parsed = JSON.parse(content);
-    if (!parsed || !Array.isArray(parsed.domains)) {
-      return { domains: [], totalSpent: 0, currency: "USD" };
-    }
-    return parsed as Portfolio;
-  } catch {
-    return { domains: [], totalSpent: 0, currency: "USD" };
-  }
+  const rows = getPortfolioDomains();
+  const domains = rows.map(dbRowToPortfolioDomain);
+  const totalSpent = domains.reduce((sum, d) => sum + d.purchasePrice, 0);
+  return { domains, totalSpent, currency: "USD" };
 }
 
-export function savePortfolio(portfolio: Portfolio): void {
-  ensureDir();
-  const updated = {
-    ...portfolio,
-    totalSpent: portfolio.domains.reduce((sum, d) => sum + d.purchasePrice, 0),
-  };
-  writeFileSync(PORTFOLIO_FILE, JSON.stringify(updated, null, 2), "utf-8");
+export function savePortfolio(_portfolio: Portfolio): void {
+  // No-op: SQLite handles persistence automatically
+  // Kept for backward compatibility
 }
 
 export function addToPortfolio(
@@ -61,55 +64,27 @@ export function addToPortfolio(
   details: Partial<PortfolioDomain> = {}
 ): Portfolio {
   if (!isValidDomain(domain)) throw new Error(`Invalid domain: ${domain}`);
-  const portfolio = loadPortfolio();
-
-  const existing = portfolio.domains.findIndex((d) => d.domain === domain);
-  const entry: PortfolioDomain = {
-    domain,
-    registrar: details.registrar || "unknown",
-    purchaseDate: details.purchaseDate || new Date().toISOString().split("T")[0]!,
-    expiryDate: details.expiryDate || "",
-    purchasePrice: details.purchasePrice || 0,
-    renewalPrice: details.renewalPrice || 0,
-    currency: details.currency || "USD",
-    autoRenew: details.autoRenew ?? false,
-    tags: details.tags || [],
-    notes: details.notes || "",
-    addedAt: new Date().toISOString(),
-  };
-
-  if (existing >= 0) {
-    const updatedDomains = [...portfolio.domains];
-    updatedDomains[existing] = entry;
-    const updatedPortfolio = { ...portfolio, domains: updatedDomains };
-    savePortfolio(updatedPortfolio);
-    return updatedPortfolio;
-  } else {
-    const updatedPortfolio = { ...portfolio, domains: [...portfolio.domains, entry] };
-    savePortfolio(updatedPortfolio);
-    return updatedPortfolio;
-  }
+  dbAddPortfolio(domain, {
+    registrar: details.registrar,
+    purchaseDate: details.purchaseDate,
+    expiryDate: details.expiryDate,
+    purchasePrice: details.purchasePrice,
+    renewalPrice: details.renewalPrice,
+    currency: details.currency,
+    autoRenew: details.autoRenew,
+    tags: details.tags,
+    notes: details.notes,
+  });
+  return loadPortfolio();
 }
 
 export function removeFromPortfolio(domain: string): Portfolio {
-  const portfolio = loadPortfolio();
-  const updatedPortfolio = {
-    ...portfolio,
-    domains: portfolio.domains.filter((d) => d.domain !== domain),
-  };
-  savePortfolio(updatedPortfolio);
-  return updatedPortfolio;
+  dbRemovePortfolio(domain);
+  return loadPortfolio();
 }
 
 export function getExpiringDomains(withinDays: number = 30): PortfolioDomain[] {
-  const portfolio = loadPortfolio();
-  const now = Date.now();
-  return portfolio.domains.filter((d) => {
-    if (!d.expiryDate) return false;
-    const expiry = new Date(d.expiryDate).getTime();
-    const daysLeft = (expiry - now) / 86400000;
-    return daysLeft >= 0 && daysLeft <= withinDays;
-  });
+  return getPortfolioExpiring(withinDays).map(dbRowToPortfolioDomain);
 }
 
 export function getPortfolioStats(): {
@@ -119,16 +94,5 @@ export function getPortfolioStats(): {
   expiringIn90: number;
   byRegistrar: Record<string, number>;
 } {
-  const portfolio = loadPortfolio();
-  const byRegistrar: Record<string, number> = {};
-  for (const d of portfolio.domains) {
-    byRegistrar[d.registrar] = (byRegistrar[d.registrar] || 0) + 1;
-  }
-  return {
-    total: portfolio.domains.length,
-    totalSpent: portfolio.totalSpent,
-    expiringIn30: getExpiringDomains(30).length,
-    expiringIn90: getExpiringDomains(90).length,
-    byRegistrar,
-  };
+  return getPortfolioStatsDb();
 }
