@@ -68,7 +68,7 @@ function migrate(db: Database): void {
   }
 }
 
-const MIGRATIONS: readonly Migration[] = [
+const MIGRATIONS: Migration[] = [
   {
     name: "001_create_domains",
     sql: `
@@ -173,7 +173,100 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
     `,
   },
-] as const;
+  {
+    name: "007_portfolio_expand",
+    sql: `
+      ALTER TABLE portfolio ADD COLUMN status TEXT DEFAULT 'active';
+      ALTER TABLE portfolio ADD COLUMN category TEXT DEFAULT 'uncategorized';
+      ALTER TABLE portfolio ADD COLUMN estimated_value REAL DEFAULT 0;
+      ALTER TABLE portfolio ADD COLUMN last_health_check TEXT;
+    `,
+  },
+  {
+    name: "008_create_transactions",
+    sql: `
+      CREATE TABLE IF NOT EXISTS portfolio_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT NOT NULL,
+        type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        description TEXT DEFAULT '',
+        date TEXT NOT NULL DEFAULT (date('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_txn_domain ON portfolio_transactions(domain);
+      CREATE INDEX IF NOT EXISTS idx_txn_date ON portfolio_transactions(date);
+      CREATE INDEX IF NOT EXISTS idx_txn_type ON portfolio_transactions(type);
+    `,
+  },
+  {
+    name: "009_create_valuations",
+    sql: `
+      CREATE TABLE IF NOT EXISTS portfolio_valuations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT NOT NULL,
+        estimated_value REAL NOT NULL,
+        source TEXT DEFAULT 'manual',
+        valued_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_val_domain ON portfolio_valuations(domain);
+    `,
+  },
+  {
+    name: "010_create_pipeline",
+    sql: `
+      CREATE TABLE IF NOT EXISTS acquisition_pipeline (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'watching',
+        max_bid REAL,
+        current_price REAL,
+        source TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        priority TEXT DEFAULT 'medium',
+        added_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_pipeline_status ON acquisition_pipeline(status);
+    `,
+  },
+  {
+    name: "011_create_categories",
+    sql: `
+      CREATE TABLE IF NOT EXISTS portfolio_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        color TEXT DEFAULT '#5c9cf5',
+        description TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT OR IGNORE INTO portfolio_categories (name, description) VALUES
+        ('uncategorized', 'Default category'),
+        ('investments', 'Domains held for resale'),
+        ('projects', 'Domains used for active projects'),
+        ('clients', 'Domains managed for clients'),
+        ('for-sale', 'Domains actively listed for sale'),
+        ('archived', 'Domains no longer maintained');
+    `,
+  },
+  {
+    name: "012_create_alerts",
+    sql: `
+      CREATE TABLE IF NOT EXISTS portfolio_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT NOT NULL,
+        type TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'info',
+        message TEXT NOT NULL,
+        acknowledged INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_alerts_domain ON portfolio_alerts(domain);
+      CREATE INDEX IF NOT EXISTS idx_alerts_ack ON portfolio_alerts(acknowledged);
+    `,
+  },
+];
 
 // ─── Row types ───────────────────────────────────────────
 
