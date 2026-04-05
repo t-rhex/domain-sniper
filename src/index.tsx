@@ -1118,6 +1118,189 @@ market
     console.log(`  Users:          ${s.totalUsers}\n`);
   });
 
+// ─── Proxy commands ──────────────────────────────────────
+
+const proxy = program
+  .command("proxy")
+  .description("HTTP intercepting proxy — capture and analyze traffic");
+
+proxy
+  .command("start")
+  .description("Start the intercepting proxy")
+  .option("-p, --port <port>", "Proxy port", "8080")
+  .option("--https", "Enable HTTPS interception (requires CA cert)", false)
+  .option("--filter <hosts>", "Only intercept these hosts (comma-separated)")
+  .action(async (opts: { port: string; https: boolean; filter?: string }) => {
+    const { startProxy } = await import("./proxy/server.js");
+    const filterHosts = opts.filter ? opts.filter.split(",").map((h) => h.trim()) : undefined;
+
+    startProxy({
+      port: parseInt(opts.port, 10),
+      httpsInterception: opts.https,
+      filterHosts,
+      onRequest: (entry) => {
+        const statusColor = entry.statusCode && entry.statusCode < 400 ? "\x1b[32m" : "\x1b[31m";
+        console.log(`  ${entry.method.padEnd(6)} ${statusColor}${entry.statusCode || "ERR"}\x1b[0m ${entry.host}${entry.url.replace(/^https?:\/\/[^/]+/, "")} (${entry.durationMs}ms, ${entry.size}b)`);
+      },
+    });
+
+    // Keep running
+    console.log("Press Ctrl+C to stop\n");
+  });
+
+proxy
+  .command("history")
+  .description("Browse intercepted requests")
+  .option("--host <host>", "Filter by host")
+  .option("--method <method>", "Filter by method (GET, POST, etc.)")
+  .option("--search <query>", "Search in URL/body")
+  .option("--flagged", "Show only flagged requests")
+  .option("-n, --limit <n>", "Number of results", "30")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { host?: string; method?: string; search?: string; flagged?: boolean; limit: string; json?: boolean }) => {
+    const { getRequests } = await import("./proxy/db.js");
+    const result = getRequests({
+      host: opts.host, method: opts.method, search: opts.search,
+      flagged: opts.flagged, limit: parseInt(opts.limit, 10),
+    });
+    if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+
+    console.log(`\nIntercepted Requests (${result.total} total):\n`);
+    console.log(`  ${"ID".padEnd(6)} ${"METHOD".padEnd(8)} ${"STATUS".padEnd(8)} ${"HOST".padEnd(30)} ${"PATH".padEnd(30)} ${"MS".padEnd(6)}`);
+    console.log(`  ${"─".repeat(6)} ${"─".repeat(8)} ${"─".repeat(8)} ${"─".repeat(30)} ${"─".repeat(30)} ${"─".repeat(6)}`);
+    for (const r of result.requests) {
+      const statusColor = r.status_code && r.status_code < 400 ? "\x1b[32m" : r.status_code && r.status_code < 500 ? "\x1b[33m" : "\x1b[31m";
+      console.log(`  ${String(r.id).padEnd(6)} ${r.method.padEnd(8)} ${statusColor}${String(r.status_code || "ERR").padEnd(8)}\x1b[0m ${r.host.slice(0, 30).padEnd(30)} ${r.path.slice(0, 30).padEnd(30)} ${String(r.duration_ms).padEnd(6)}`);
+    }
+    console.log();
+  });
+
+proxy
+  .command("inspect <id>")
+  .description("View full details of an intercepted request")
+  .option("--json", "Output as JSON")
+  .action(async (id: string, opts: { json?: boolean }) => {
+    const { getRequest } = await import("./proxy/db.js");
+    const req = getRequest(parseInt(id, 10));
+    if (!req) { console.error("Request not found"); process.exit(1); }
+
+    if (opts.json) { console.log(JSON.stringify(req, null, 2)); return; }
+
+    console.log(`\n── Request #${req.id} ──────────────────────────────`);
+    console.log(`${req.method} ${req.url}`);
+    console.log(`Host: ${req.host}`);
+    console.log(`Time: ${req.intercepted_at} (${req.duration_ms}ms)\n`);
+
+    console.log("── Request Headers ─────────────────────────────");
+    try {
+      const headers = JSON.parse(req.request_headers) as Record<string, string>;
+      for (const [k, v] of Object.entries(headers)) console.log(`  ${k}: ${v}`);
+    } catch {}
+
+    if (req.request_body) {
+      console.log("\n── Request Body ────────────────────────────────");
+      console.log(req.request_body.slice(0, 2000));
+    }
+
+    console.log(`\n── Response (${req.status_code}) ───────────────────────────`);
+    try {
+      const headers = JSON.parse(req.response_headers) as Record<string, string>;
+      for (const [k, v] of Object.entries(headers)) console.log(`  ${k}: ${v}`);
+    } catch {}
+
+    if (req.response_body) {
+      console.log("\n── Response Body ───────────────────────────────");
+      console.log(req.response_body.slice(0, 5000));
+    }
+    console.log();
+  });
+
+proxy
+  .command("replay <id>")
+  .description("Replay an intercepted request")
+  .action(async (id: string) => {
+    const { getRequest } = await import("./proxy/db.js");
+    const req = getRequest(parseInt(id, 10));
+    if (!req) { console.error("Request not found"); process.exit(1); }
+
+    console.log(`\nReplaying: ${req.method} ${req.url}`);
+    const startTime = Date.now();
+    try {
+      const headers = JSON.parse(req.request_headers) as Record<string, string>;
+      const resp = await fetch(req.url, {
+        method: req.method,
+        headers,
+        body: req.method !== "GET" && req.method !== "HEAD" ? req.request_body : undefined,
+      });
+      const body = await resp.text();
+      const duration = Date.now() - startTime;
+      console.log(`Status: ${resp.status} (${duration}ms, ${body.length} bytes)`);
+      console.log(body.slice(0, 2000));
+    } catch (err: unknown) {
+      console.error(`Failed: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+    console.log();
+  });
+
+proxy
+  .command("clear")
+  .description("Clear intercepted request history")
+  .option("--host <host>", "Only clear requests for this host")
+  .action(async (opts: { host?: string }) => {
+    const { clearRequests } = await import("./proxy/db.js");
+    const count = clearRequests(opts.host);
+    console.log(`Cleared ${count} requests${opts.host ? ` for ${opts.host}` : ""}`);
+  });
+
+proxy
+  .command("stats")
+  .description("Show proxy statistics")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const { getProxyStats, getTopHosts } = await import("./proxy/db.js");
+    const stats = getProxyStats();
+    const topHosts = getTopHosts(5);
+    if (opts.json) { console.log(JSON.stringify({ stats, topHosts }, null, 2)); return; }
+
+    console.log(`\nProxy Statistics:`);
+    console.log(`  Total requests: ${stats.totalRequests}`);
+    console.log(`  Unique hosts:   ${stats.uniqueHosts}`);
+    console.log(`  Flagged:        ${stats.flagged}`);
+    console.log(`  Avg latency:    ${stats.avgDuration}ms`);
+    if (topHosts.length > 0) {
+      console.log(`\n  Top Hosts:`);
+      for (const h of topHosts) console.log(`    ${h.host.padEnd(30)} ${h.count} requests`);
+    }
+    console.log();
+  });
+
+proxy
+  .command("ca")
+  .description("Manage CA certificate for HTTPS interception")
+  .option("--generate", "Generate CA certificate")
+  .option("--install", "Show installation instructions")
+  .option("--path", "Show CA certificate path")
+  .action(async (opts: { generate?: boolean; install?: boolean; path?: boolean }) => {
+    const { generateCA, getCACertPath, hasCA, getInstallInstructions } = await import("./proxy/ca.js");
+    if (opts.generate) {
+      generateCA();
+      console.log("CA certificate generated.");
+      console.log(`Path: ${getCACertPath()}`);
+      return;
+    }
+    if (opts.path) {
+      console.log(getCACertPath());
+      return;
+    }
+    // Default: show install instructions
+    if (!hasCA()) {
+      console.log("No CA certificate found. Generate one first:");
+      console.log("  domain-sniper proxy ca --generate\n");
+      return;
+    }
+    console.log(getInstallInstructions());
+  });
+
 program.parse();
 
 // ─── Types ───────────────────────────────────────────────
