@@ -13,11 +13,22 @@ function ensureAppDir(): void {
 
 // ─── Database singleton ──────────────────────────────────
 let _db: Database | null = null;
+let _dbPath: string | null = null;
+
+/**
+ * Override the database path. Call BEFORE getDb().
+ * Use ":memory:" for tests to avoid polluting the real database.
+ */
+export function setDbPath(path: string): void {
+  if (_db) { _db.close(); _db = null; }
+  _dbPath = path;
+}
 
 export function getDb(): Database {
   if (_db) return _db;
-  ensureAppDir();
-  _db = new Database(DB_FILE);
+  const dbPath = _dbPath || DB_FILE;
+  if (dbPath !== ":memory:") ensureAppDir();
+  _db = new Database(dbPath);
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA foreign_keys = ON");
   _db.run("PRAGMA busy_timeout = 5000");

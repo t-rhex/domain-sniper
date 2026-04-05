@@ -2,6 +2,7 @@ import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import {
   getDb,
   closeDb,
+  setDbPath,
   upsertDomain,
   getDomainByName,
   getAllDomains,
@@ -30,12 +31,17 @@ import {
 } from "../src/core/db.js";
 import { createEmptyEntry } from "../src/core/types.js";
 
-// These tests use the real singleton DB.
-// Each test uses unique domain names to avoid conflicts.
+// Use in-memory database for tests — never pollute the real DB
+beforeAll(() => {
+  setDbPath(":memory:");
+});
 
-const TEST_PREFIX = `test-${Date.now()}`;
+afterAll(() => {
+  closeDb();
+});
+
 function testDomain(n: number): string {
-  return `${TEST_PREFIX}-${n}.example.com`;
+  return `test-${n}.example.com`;
 }
 
 describe("Database: Domains", () => {
@@ -71,7 +77,7 @@ describe("Database: Domains", () => {
   test("searchDomains finds by partial match", () => {
     const domain = testDomain(4);
     upsertDomain(domain);
-    const results = searchDomains(TEST_PREFIX);
+    const results = searchDomains("test-");
     expect(results.length).toBeGreaterThan(0);
     expect(results.some((r) => r.domain === domain)).toBe(true);
   });
