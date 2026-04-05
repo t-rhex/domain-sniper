@@ -9,6 +9,10 @@ import { checkWayback } from "./features/wayback.js";
 import { calculateDomainAge } from "./features/domain-age.js";
 import { sanitizeDomainList, safePath } from "./validate.js";
 import { bashCompletions, zshCompletions, fishCompletions } from "./completions.js";
+import { checkSocialMedia } from "./features/social-check.js";
+import { detectTechStack } from "./features/tech-stack.js";
+import { checkBlacklists } from "./features/blacklist-check.js";
+import { estimateBacklinks } from "./features/backlinks.js";
 
 const program = new Command();
 
@@ -219,6 +223,58 @@ program
     console.log(JSON.stringify(config, null, 2));
   });
 
+// ─── Expiring subcommand ────────────────────────────────
+
+program
+  .command("expiring")
+  .description("Browse expiring/dropping domains")
+  .option("--tld <tld>", "Filter by TLD (e.g., com, net)")
+  .option("--min-age <years>", "Minimum domain age in years")
+  .option("-n, --limit <n>", "Max results", "20")
+  .option("--api-key <key>", "WhoisFreaks API key")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { tld?: string; minAge?: string; limit: string; apiKey?: string; json?: boolean }) => {
+    const { getExpiringFeed } = await import("./features/expiring-feed.js");
+    const results = await getExpiringFeed({
+      apiKey: opts.apiKey || process.env.WHOISFREAKS_API_KEY,
+      tld: opts.tld,
+      minAge: opts.minAge ? parseInt(opts.minAge, 10) : undefined,
+      limit: parseInt(opts.limit, 10),
+    });
+    if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
+    console.log(`\nExpiring Domains (${results.length} found):\n`);
+    if (results.length === 0) { console.log("  No results. Provide --api-key or set WHOISFREAKS_API_KEY env var."); }
+    for (const d of results) {
+      console.log(`  ${d.domain}  expires: ${d.expiryDate}${d.registrar ? `  [${d.registrar}]` : ""}${d.age ? `  age: ${d.age}` : ""}`);
+    }
+    console.log();
+  });
+
+// ─── Drop catch subcommand ──────────────────────────────
+
+program
+  .command("dropcatch <domain>")
+  .description("Monitor an expiring domain and auto-register when it drops")
+  .option("--interval <seconds>", "Poll interval in seconds", "30")
+  .option("--max-hours <hours>", "Maximum hours to monitor", "24")
+  .action(async (domain: string, opts: { interval: string; maxHours: string }) => {
+    const { createDropCatcher, formatDropCatchStatus } = await import("./features/drop-catch.js");
+    const { loadConfigFromEnv } = await import("./registrar.js");
+    const config = loadConfigFromEnv();
+    if (!config?.apiKey) { console.error("Registrar credentials required. Set REGISTRAR_PROVIDER and REGISTRAR_API_KEY."); process.exit(1); }
+    const intervalMs = parseInt(opts.interval, 10) * 1000;
+    const maxAttempts = Math.ceil((parseInt(opts.maxHours, 10) * 3600000) / intervalMs);
+    console.log(`\nDrop Catch: ${domain}`);
+    console.log(`  Polling every ${opts.interval}s for up to ${opts.maxHours}h (${maxAttempts} attempts)\n`);
+    const catcher = createDropCatcher({
+      domain, registrarConfig: config, pollIntervalMs: intervalMs, maxAttempts,
+      onStatus: (s) => console.log(`  ${formatDropCatchStatus(s)}`),
+      onSuccess: () => { console.log(`\n  SUCCESS — ${domain} registered!\n`); process.exit(0); },
+      onFailed: (_d, err) => { console.log(`\n  FAILED — ${err}\n`); process.exit(1); },
+    });
+    await catcher.start();
+  });
+
 program.parse();
 
 // ─── Types ───────────────────────────────────────────────
@@ -245,6 +301,10 @@ interface JsonOutputResult {
   http: { status: number | null; server: string | null; parked: boolean; reachable: boolean; redirectUrl: string | null } | null;
   wayback: { hasHistory: boolean; snapshots: number; firstArchived: string | null; lastArchived: string | null } | null;
   price: number | null;
+  social: Awaited<ReturnType<typeof checkSocialMedia>> | null;
+  techStack: Awaited<ReturnType<typeof detectTechStack>> | null;
+  blacklist: Awaited<ReturnType<typeof checkBlacklists>> | null;
+  backlinks: Awaited<ReturnType<typeof estimateBacklinks>> | null;
 }
 
 interface JsonOutput {
@@ -348,6 +408,19 @@ async function runHeadless(domains: string[], options: CliOptions) {
       }
     }
 
+    // New feature data collection
+    let socialResult: Awaited<ReturnType<typeof checkSocialMedia>> | null = null;
+    try { socialResult = await checkSocialMedia(domain); } catch {}
+
+    let techResult: Awaited<ReturnType<typeof detectTechStack>> | null = null;
+    try { techResult = await detectTechStack(domain); } catch {}
+
+    let blacklistResult: Awaited<ReturnType<typeof checkBlacklists>> | null = null;
+    try { blacklistResult = await checkBlacklists(domain); } catch {}
+
+    let backlinkResult: Awaited<ReturnType<typeof estimateBacklinks>> | null = null;
+    try { backlinkResult = await estimateBacklinks(domain); } catch {}
+
     if (isJsonMode) {
       jsonResults.push({
         domain,
@@ -363,6 +436,10 @@ async function runHeadless(domains: string[], options: CliOptions) {
         http: httpResult,
         wayback: waybackResult,
         price,
+        social: socialResult,
+        techStack: techResult,
+        blacklist: blacklistResult,
+        backlinks: backlinkResult,
       });
     } else {
       // Normal text output
@@ -403,6 +480,41 @@ async function runHeadless(domains: string[], options: CliOptions) {
 
       // Domain age
       if (age) console.log(`    Age: ${age}`);
+
+      // Social media
+      if (socialResult) {
+        const avail = socialResult.filter((s) => s.available && !s.error);
+        if (avail.length > 0) {
+          console.log(`    Social avail: ${avail.map((s) => s.platform).join(", ")}`);
+        }
+      }
+
+      // Tech stack
+      if (techResult) {
+        const items: string[] = [];
+        if (techResult.cms) items.push(techResult.cms);
+        if (techResult.framework) items.push(techResult.framework);
+        if (techResult.cdn) items.push(techResult.cdn);
+        if (items.length > 0) console.log(`    Tech: ${items.join(", ")}`);
+      }
+
+      // Blacklist
+      if (blacklistResult) {
+        if (blacklistResult.listed) {
+          const names = blacklistResult.lists.filter((l) => l.listed).map((l) => l.name).join(", ");
+          console.log(`    \x1b[31mBLACKLISTED: ${names}\x1b[0m`);
+        } else {
+          console.log(`    Reputation: clean (${blacklistResult.cleanCount}/${blacklistResult.lists.length})`);
+        }
+      }
+
+      // Backlinks
+      if (backlinkResult) {
+        const parts: string[] = [];
+        if (backlinkResult.pageRank !== null) parts.push(`PageRank: ${backlinkResult.pageRank}`);
+        if (backlinkResult.commonCrawlPages !== null) parts.push(`CC pages: ~${backlinkResult.commonCrawlPages}`);
+        if (parts.length > 0) console.log(`    Authority: ${parts.join(", ")}`);
+      }
 
       // Registrar check
       if (config?.apiKey) {
