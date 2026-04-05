@@ -1833,7 +1833,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
               </box>
             </scrollbox>
           ) : (
-            <scrollbox flexGrow={1} paddingLeft={2} paddingRight={2} minHeight={0} scrollbarOptions={{ visible: false }}>
+            <box flexGrow={1} alignItems="center" justifyContent="center" minHeight={0}>
               {(() => {
                 const dbStats = (() => { try { return getDbStats(); } catch { return null; } })();
                 const portfolio = (() => { try { return getPortfolioDashboard(); } catch { return null; } })();
@@ -1841,136 +1841,179 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 const recentDomains = (() => { try { return getAllDomains(5, 0); } catch { return []; } })();
                 const alerts = (() => { try { return getUnacknowledgedAlerts(); } catch { return []; } })();
                 const hasData = dbStats && dbStats.totalScans > 0;
+                const cardW = Math.min(64, width - 8);
+                const inner = cardW - 4;
+                const line = "─".repeat(cardW - 2);
+                const dblLine = "═".repeat(cardW - 2);
 
                 return (
-                  <box flexDirection="column" gap={0} paddingTop={1}>
+                  <box flexDirection="column" width={cardW}>
+                    {/* Card top border */}
+                    <text content={`╭${dblLine}╮`} fg={theme.border} />
+
                     {/* Title */}
-                    <box flexDirection="row" gap={2} paddingLeft={1}>
-                      <text content="◆ DOMAIN SNIPER v2.0" fg={theme.primary} />
-                      <text content="Domain Intelligence & Security Recon" fg={theme.textDisabled} />
-                    </box>
-                    <text content="" />
-
-                    {/* First-run guide */}
-                    {!hasData && (
-                      <box flexDirection="column" paddingLeft={1}>
-                        <text content="GETTING STARTED" fg={theme.primary} />
-                        <text content="" />
-                        <text content="  1. Press / and enter a domain to scan it" fg={theme.textSecondary} />
-                        <text content="     Try: example.com, google.com, or any domain" fg={theme.textDisabled} />
-                        <text content="" />
-                        <text content="  2. Press e to check a name across all TLDs" fg={theme.textSecondary} />
-                        <text content="     Try: coolstartup (checks .com, .io, .dev, etc.)" fg={theme.textDisabled} />
-                        <text content="" />
-                        <text content="  3. Press n to enable security recon mode" fg={theme.textSecondary} />
-                        <text content="     Adds port scanning, security headers, email audit" fg={theme.textDisabled} />
-                        <text content="" />
-                        <text content="  4. Configure registrar for auto-registration:" fg={theme.textSecondary} />
-                        <text content="     cp .env.example .env && edit .env" fg={theme.textDisabled} />
-                        <text content="" />
-                        <text content="  5. Start the marketplace:" fg={theme.textSecondary} />
-                        <text content="     domain-sniper serve" fg={theme.textDisabled} />
-                        <text content="     domain-sniper market signup" fg={theme.textDisabled} />
-                        <text content="" />
+                    <box flexDirection="row">
+                      <text content="│" fg={theme.border} />
+                      <box flexGrow={1} justifyContent="center" flexDirection="row" gap={1}>
+                        <text content="◆" fg={theme.primary} />
+                        <text content="DOMAIN SNIPER" fg={theme.primary} />
+                        <text content="v2.0" fg={theme.textDisabled} />
                       </box>
-                    )}
+                      <text content="│" fg={theme.border} />
+                    </box>
+                    <box flexDirection="row">
+                      <text content="│" fg={theme.border} />
+                      <box flexGrow={1} justifyContent="center">
+                        <text content="Domain Intelligence & Security Recon" fg={theme.textMuted} />
+                      </box>
+                      <text content="│" fg={theme.border} />
+                    </box>
 
-                    {/* Stats row — only if there's data */}
-                    {hasData && (
-                      <box flexDirection="row" gap={3} paddingLeft={1}>
-                        <box flexDirection="column">
-                          <text content="DATABASE" fg={theme.secondary} />
-                          <text content={`  ${dbStats.totalDomains} domains tracked`} fg={theme.textSecondary} />
-                          <text content={`  ${dbStats.totalScans} total scans`} fg={theme.textSecondary} />
-                          <text content={`  ${dbStats.totalSessions} sessions`} fg={theme.textSecondary} />
-                          <text content={`  ${dbStats.cacheEntries} cached`} fg={theme.textDisabled} />
+                    {/* Divider */}
+                    <text content={`├${line}┤`} fg={theme.borderSubtle} />
+
+                    {/* Stats or Getting Started */}
+                    {hasData ? (
+                      <>
+                        {/* Stats row */}
+                        <box flexDirection="row">
+                          <text content="│" fg={theme.border} />
+                          <box flexGrow={1} flexDirection="row" justifyContent="space-around" paddingLeft={1} paddingRight={1}>
+                            <box flexDirection="column" alignItems="center">
+                              <text content={`${dbStats.totalDomains}`} fg={theme.primary} />
+                              <text content="domains" fg={theme.textDisabled} />
+                            </box>
+                            <box flexDirection="column" alignItems="center">
+                              <text content={`${dbStats.totalScans}`} fg={theme.primary} />
+                              <text content="scans" fg={theme.textDisabled} />
+                            </box>
+                            <box flexDirection="column" alignItems="center">
+                              <text content={`${dbStats.totalSessions}`} fg={theme.info} />
+                              <text content="sessions" fg={theme.textDisabled} />
+                            </box>
+                            {portfolio && portfolio.totalDomains > 0 && (
+                              <box flexDirection="column" alignItems="center">
+                                <text content={`$${portfolio.totalValue.toFixed(0)}`} fg={theme.warning} />
+                                <text content="value" fg={theme.textDisabled} />
+                              </box>
+                            )}
+                          </box>
+                          <text content="│" fg={theme.border} />
                         </box>
-                        {portfolio && portfolio.totalDomains > 0 && (
-                          <box flexDirection="column">
-                            <text content="PORTFOLIO" fg={theme.secondary} />
-                            <text content={`  ${portfolio.totalDomains} domains`} fg={theme.textSecondary} />
-                            <text content={`  $${portfolio.totalValue.toFixed(0)} est. value`} fg={theme.primary} />
-                            <text content={`  $${portfolio.totalProfit.toFixed(0)} profit`} fg={portfolio.totalProfit >= 0 ? theme.primary : theme.error} />
-                            {portfolio.expiringIn30 > 0 && <text content={`  ${portfolio.expiringIn30} expiring soon`} fg={theme.warning} />}
-                          </box>
+
+                        {/* Alerts */}
+                        {alerts.length > 0 && (
+                          <>
+                            <text content={`├${line}┤`} fg={theme.borderSubtle} />
+                            {alerts.slice(0, 2).map((a: any) => (
+                              <box key={a.id} flexDirection="row">
+                                <text content="│" fg={theme.border} />
+                                <box flexGrow={1} paddingLeft={1}>
+                                  <text content={`${a.severity === "critical" ? "!!" : "!"} ${a.domain}: ${a.message}`} fg={a.severity === "critical" ? theme.error : theme.warning} />
+                                </box>
+                                <text content="│" fg={theme.border} />
+                              </box>
+                            ))}
+                          </>
                         )}
-                        {isLoggedIn() && (
-                          <box flexDirection="column">
-                            <text content="MARKETPLACE" fg={theme.secondary} />
-                            <text content={`  ${getAuthInfo()?.name || "user"}`} fg={theme.primary} />
-                            <text content={`  ${getServerUrl()}`} fg={theme.textDisabled} />
-                            {marketUnread > 0 && <text content={`  ${marketUnread} unread messages`} fg={theme.warning} />}
-                          </box>
+
+                        {/* Expiring */}
+                        {expiring.length > 0 && (
+                          <>
+                            <text content={`├${line}┤`} fg={theme.borderSubtle} />
+                            <box flexDirection="row">
+                              <text content="│" fg={theme.border} />
+                              <box flexGrow={1} paddingLeft={1}>
+                                <text content={`${expiring.length} domain${expiring.length > 1 ? "s" : ""} expiring within 30 days`} fg={theme.warning} />
+                              </box>
+                              <text content="│" fg={theme.border} />
+                            </box>
+                          </>
                         )}
-                      </box>
-                    )}
-                    {hasData && <text content="" />}
 
-                    {/* Alerts */}
-                    {alerts.length > 0 && (
-                      <box flexDirection="column" paddingLeft={1}>
-                        <text content={`ALERTS (${alerts.length})`} fg={theme.warning} />
-                        {alerts.slice(0, 3).map((a: any) => (
-                          <text key={a.id} content={`  ${a.severity === "critical" ? "!!" : "! "} ${a.domain}: ${a.message}`} fg={a.severity === "critical" ? theme.error : theme.warning} />
-                        ))}
-                        {alerts.length > 3 && <text content={`  +${alerts.length - 3} more (press P for details)`} fg={theme.textDisabled} />}
-                        <text content="" />
-                      </box>
+                        {/* Recent scans */}
+                        {recentDomains.length > 0 && (
+                          <>
+                            <text content={`├${line}┤`} fg={theme.borderSubtle} />
+                            <box flexDirection="row">
+                              <text content="│" fg={theme.border} />
+                              <box flexGrow={1} paddingLeft={1}>
+                                <text content="Recent" fg={theme.textMuted} />
+                              </box>
+                              <text content="│" fg={theme.border} />
+                            </box>
+                            {recentDomains.slice(0, 3).map((d: any) => (
+                              <box key={d.domain} flexDirection="row">
+                                <text content="│" fg={theme.border} />
+                                <box flexGrow={1} paddingLeft={2} flexDirection="row" gap={1}>
+                                  <text content="·" fg={theme.textDisabled} />
+                                  <text content={d.domain} fg={theme.textSecondary} />
+                                  {d.scan_count > 0 && <text content={`(${d.scan_count}x)`} fg={theme.textDisabled} />}
+                                </box>
+                                <text content="│" fg={theme.border} />
+                              </box>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {/* First-run getting started */}
+                        <box flexDirection="row">
+                          <text content="│" fg={theme.border} />
+                          <box flexGrow={1} justifyContent="center">
+                            <text content="Welcome! Start by scanning a domain." fg={theme.textSecondary} />
+                          </box>
+                          <text content="│" fg={theme.border} />
+                        </box>
+                      </>
                     )}
 
-                    {/* Expiring domains */}
-                    {expiring.length > 0 && (
-                      <box flexDirection="column" paddingLeft={1}>
-                        <text content="EXPIRING SOON (30 days)" fg={theme.error} />
-                        {expiring.slice(0, 3).map((d: any) => (
-                          <text key={d.domain} content={`  ${d.domain}  ${d.expiry_date || ""}`} fg={theme.warning} />
-                        ))}
-                        <text content="" />
-                      </box>
-                    )}
+                    {/* Divider */}
+                    <text content={`├${line}┤`} fg={theme.borderSubtle} />
 
-                    {/* Recent domains */}
-                    {recentDomains.length > 0 && (
-                      <box flexDirection="column" paddingLeft={1}>
-                        <text content="RECENTLY SCANNED" fg={theme.textMuted} />
-                        {recentDomains.map((d: any) => (
-                          <text key={d.domain} content={`  ${d.domain}  (${d.scan_count}x)`} fg={theme.textDisabled} />
-                        ))}
-                        <text content="" />
+                    {/* Quick start commands */}
+                    <box flexDirection="row">
+                      <text content="│" fg={theme.border} />
+                      <box flexGrow={1} flexDirection="row" justifyContent="space-around" paddingLeft={1} paddingRight={1}>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.primaryDim}><text content=" / " fg={theme.primary} /></box><text content="scan" fg={theme.textSecondary} /></box>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.primaryDim}><text content=" e " fg={theme.primary} /></box><text content="expand" fg={theme.textSecondary} /></box>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.primaryDim}><text content=" f " fg={theme.primary} /></box><text content="file" fg={theme.textSecondary} /></box>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.primaryDim}><text content=" ? " fg={theme.primary} /></box><text content="help" fg={theme.textSecondary} /></box>
                       </box>
-                    )}
-
-                    {/* Quick start */}
-                    <box flexDirection="column" paddingLeft={1}>
-                      <text content="QUICK START" fg={theme.primary} />
-                      <text content="  /    Scan domains          e    TLD expansion" fg={theme.textSecondary} />
-                      <text content="  f    Load from file        n    Toggle recon mode" fg={theme.textSecondary} />
-                      <text content="  M    Marketplace           P    Portfolio dashboard" fg={theme.textSecondary} />
-                      <text content="  ?    All commands          q    Quit" fg={theme.textSecondary} />
+                      <text content="│" fg={theme.border} />
                     </box>
-                    <text content="" />
-
-                    {/* Modes */}
-                    <box flexDirection="column" paddingLeft={1}>
-                      <text content="MODES" fg={theme.textMuted} />
-                      <box flexDirection="row" gap={2}>
-                        <text content={`  Recon: ${reconMode ? "ON" : "OFF"}`} fg={reconMode ? theme.warning : theme.textDisabled} />
-                        <text content={`  Registrar: ${registrarConfig?.apiKey ? registrarConfig.provider : "none"}`} fg={registrarConfig?.apiKey ? theme.secondary : theme.textDisabled} />
-                        <text content={`  Market: ${isLoggedIn() ? "signed in" : "not signed in"}`} fg={isLoggedIn() ? theme.primary : theme.textDisabled} />
+                    <box flexDirection="row">
+                      <text content="│" fg={theme.border} />
+                      <box flexGrow={1} flexDirection="row" justifyContent="space-around" paddingLeft={1} paddingRight={1}>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.secondaryDim}><text content=" M " fg={theme.secondary} /></box><text content="market" fg={theme.textSecondary} /></box>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.secondaryDim}><text content=" P " fg={theme.secondary} /></box><text content="portfolio" fg={theme.textSecondary} /></box>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.accentDim}><text content=" n " fg={theme.accent} /></box><text content="recon" fg={theme.textSecondary} /></box>
+                        <box flexDirection="row" gap={1}><box backgroundColor={theme.errorDim}><text content=" q " fg={theme.error} /></box><text content="quit" fg={theme.textSecondary} /></box>
                       </box>
+                      <text content="│" fg={theme.border} />
                     </box>
-                    <text content="" />
 
-                    {/* CLI hint */}
-                    <box flexDirection="column" paddingLeft={1}>
-                      <text content="CLI COMMANDS" fg={theme.textDisabled} />
-                      <text content="  suggest <keyword>     recon <domain>       market browse" fg={theme.textDisabled} />
-                      <text content="  portfolio --dashboard  db --stats          serve --port 3000" fg={theme.textDisabled} />
+                    {/* Divider */}
+                    <text content={`├${line}┤`} fg={theme.borderSubtle} />
+
+                    {/* Modes status */}
+                    <box flexDirection="row">
+                      <text content="│" fg={theme.border} />
+                      <box flexGrow={1} flexDirection="row" justifyContent="center" gap={2} paddingLeft={1} paddingRight={1}>
+                        <text content={reconMode ? "● recon" : "○ recon"} fg={reconMode ? theme.warning : theme.textDisabled} />
+                        <text content={registrarConfig?.apiKey ? `● ${registrarConfig.provider}` : "○ registrar"} fg={registrarConfig?.apiKey ? theme.secondary : theme.textDisabled} />
+                        <text content={isLoggedIn() ? `● ${getAuthInfo()?.name}` : "○ market"} fg={isLoggedIn() ? theme.primary : theme.textDisabled} />
+                      </box>
+                      <text content="│" fg={theme.border} />
                     </box>
+
+                    {/* Card bottom border */}
+                    <text content={`╰${dblLine}╯`} fg={theme.border} />
                   </box>
                 );
               })()}
-            </scrollbox>
+            </box>
           )}
         </box>
         </>
