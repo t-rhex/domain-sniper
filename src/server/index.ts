@@ -1,4 +1,7 @@
-import { auth } from "./auth.js";
+import { auth, migrateAuth } from "./auth.js";
+
+// Run auth migrations before starting server
+await migrateAuth();
 import {
   createListing,
   getListing,

@@ -48,7 +48,7 @@ export function getAuthInfo(): { email: string; name: string; userId: string } |
 async function request(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; data: any }> {
   const auth = loadAuth();
   const url = `${getServerUrl()}${path}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = { "Content-Type": "application/json", "Origin": getServerUrl() };
   if (auth?.cookies) headers["Cookie"] = auth.cookies;
 
   try {
@@ -79,7 +79,7 @@ export async function signUp(email: string, password: string, name: string, serv
   try {
     const resp = await fetch(`${base}/api/auth/sign-up/email`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Origin": base },
       body: JSON.stringify({ email, password, name }),
     });
     const data = await resp.json() as any;
@@ -100,7 +100,7 @@ export async function signIn(email: string, password: string, serverUrl?: string
   try {
     const resp = await fetch(`${base}/api/auth/sign-in/email`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Origin": base },
       body: JSON.stringify({ email, password }),
     });
     const data = await resp.json() as any;

@@ -10,6 +10,7 @@ const AUTH_DB_FILE = join(APP_DIR, "auth.db");
 if (!existsSync(APP_DIR)) mkdirSync(APP_DIR, { recursive: true });
 
 export const auth = betterAuth({
+  baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
   database: new Database(AUTH_DB_FILE),
   emailAndPassword: {
     enabled: true,
@@ -23,3 +24,10 @@ export const auth = betterAuth({
 });
 
 export type Session = typeof auth.$Infer.Session;
+
+// Run migrations programmatically on import
+export async function migrateAuth(): Promise<void> {
+  const { getMigrations } = await import("better-auth/db/migration");
+  const { runMigrations } = await getMigrations(auth.options);
+  await runMigrations();
+}
