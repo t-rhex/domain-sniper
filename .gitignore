@@ -38,3 +38,6 @@ domain-sniper
 domain-sniper-linux
 domain-sniper-mac
 domain-sniper.exe
+
+# Marketplace server (private repo)
+marketplace/
