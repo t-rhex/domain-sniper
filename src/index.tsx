@@ -850,6 +850,260 @@ program
     closeDb();
   });
 
+// ─── Serve subcommand ──────────────────────────────────
+
+program
+  .command("serve")
+  .description("Start the marketplace server")
+  .option("--port <port>", "Port number", "3000")
+  .action(async (opts: { port: string }) => {
+    process.env.MARKET_PORT = opts.port;
+    await import("./server/index.js");
+  });
+
+// ─── Market subcommand ─────────────────────────────────
+
+const market = program
+  .command("market")
+  .description("Domain marketplace — buy, sell, and trade domains");
+
+market
+  .command("signup")
+  .description("Create a marketplace account")
+  .option("--server <url>", "Marketplace server URL", "http://localhost:3000")
+  .action(async (opts: { server: string }) => {
+    const { signUp } = await import("./market-client.js");
+    const readline = await import("readline");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+
+    const name = await ask("Name: ");
+    const email = await ask("Email: ");
+    const password = await ask("Password (min 8 chars): ");
+    rl.close();
+
+    const result = await signUp(email, password, name, opts.server);
+    if (result.success) {
+      console.log(`\n✓ Account created. Signed in as ${email}\n`);
+    } else {
+      console.error(`\n✗ ${result.error}\n`);
+      process.exit(1);
+    }
+  });
+
+market
+  .command("login")
+  .description("Sign in to the marketplace")
+  .option("--server <url>", "Marketplace server URL", "http://localhost:3000")
+  .action(async (opts: { server: string }) => {
+    const { signIn } = await import("./market-client.js");
+    const readline = await import("readline");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+
+    const email = await ask("Email: ");
+    const password = await ask("Password: ");
+    rl.close();
+
+    const result = await signIn(email, password, opts.server);
+    if (result.success) {
+      console.log(`\n✓ Signed in as ${email}\n`);
+    } else {
+      console.error(`\n✗ ${result.error}\n`);
+      process.exit(1);
+    }
+  });
+
+market
+  .command("logout")
+  .description("Sign out of the marketplace")
+  .action(async () => {
+    const { signOut } = await import("./market-client.js");
+    signOut();
+    console.log("Signed out.");
+  });
+
+market
+  .command("whoami")
+  .description("Show current auth status")
+  .action(async () => {
+    const { getAuthInfo, getServerUrl } = await import("./market-client.js");
+    const info = getAuthInfo();
+    if (info) {
+      console.log(`\nSigned in as: ${info.name} (${info.email})`);
+      console.log(`Server: ${getServerUrl()}\n`);
+    } else {
+      console.log("\nNot signed in. Use: domain-sniper market login\n");
+    }
+  });
+
+market
+  .command("browse")
+  .description("Browse domain listings")
+  .option("-q, --query <search>", "Search domains")
+  .option("--category <cat>", "Filter by category")
+  .option("--min <price>", "Minimum price")
+  .option("--max <price>", "Maximum price")
+  .option("--verified", "Only verified listings")
+  .option("--sort <field>", "Sort: newest, price_asc, price_desc, popular", "newest")
+  .option("-n, --limit <n>", "Results per page", "20")
+  .option("--json", "Output as JSON")
+  .action(async (opts: any) => {
+    const { browseListings } = await import("./market-client.js");
+    const result = await browseListings({
+      search: opts.query, category: opts.category,
+      minPrice: opts.min ? parseFloat(opts.min) : undefined,
+      maxPrice: opts.max ? parseFloat(opts.max) : undefined,
+      verified: opts.verified, sort: opts.sort,
+      limit: parseInt(opts.limit, 10),
+    });
+    if (!result.ok) { console.error("Failed to fetch listings:", result.data?.error); process.exit(1); }
+    if (opts.json) { console.log(JSON.stringify(result.data, null, 2)); return; }
+
+    const { listings, total } = result.data;
+    console.log(`\n◆ Domain Marketplace (${total} listings)\n`);
+    if (listings.length === 0) { console.log("  No listings found.\n"); return; }
+    console.log(`  ${"DOMAIN".padEnd(30)} ${"PRICE".padStart(10)} ${"STATUS".padEnd(10)} VERIFIED`);
+    console.log(`  ${"─".repeat(30)} ${"─".repeat(10)} ${"─".repeat(10)} ${"─".repeat(8)}`);
+    for (const l of listings) {
+      console.log(`  ${l.domain.padEnd(30)} ${"$" + l.asking_price.toFixed(2).padStart(9)} ${l.status.padEnd(10)} ${l.verified ? "✓" : " "}`);
+    }
+    console.log();
+  });
+
+market
+  .command("list <domain>")
+  .description("List a domain for sale")
+  .requiredOption("-p, --price <amount>", "Asking price")
+  .option("-t, --title <title>", "Listing title")
+  .option("-d, --description <desc>", "Description")
+  .option("--min-offer <amount>", "Minimum acceptable offer")
+  .option("--buy-now", "Enable buy-now at asking price")
+  .option("--category <cat>", "Category")
+  .action(async (domain: string, opts: any) => {
+    const { isLoggedIn, createListingApi } = await import("./market-client.js");
+    if (!isLoggedIn()) { console.error("Not signed in. Use: domain-sniper market login"); process.exit(1); }
+
+    const result = await createListingApi(domain, parseFloat(opts.price), {
+      title: opts.title, description: opts.description,
+      minOffer: opts.minOffer ? parseFloat(opts.minOffer) : undefined,
+      buyNow: opts.buyNow, category: opts.category,
+    });
+    if (!result.ok) { console.error("Failed:", result.data?.error); process.exit(1); }
+
+    const { listing, verification } = result.data;
+    console.log(`\n✓ Listing created (#${listing.id}): ${domain} at $${listing.asking_price}`);
+    console.log(`\nVerify ownership to activate listing:\n`);
+    console.log(`Option 1 — DNS TXT Record:`);
+    console.log(`  ${verification.instructions.dns}\n`);
+    console.log(`Option 2 — HTTP File:`);
+    console.log(`  ${verification.instructions.http}\n`);
+    console.log(`Option 3 — Meta Tag:`);
+    console.log(`  ${verification.instructions.meta}\n`);
+  });
+
+market
+  .command("verify <domain>")
+  .description("Verify domain ownership for a listing")
+  .action(async (domain: string) => {
+    const { isLoggedIn, getMyListings, verifyListingApi } = await import("./market-client.js");
+    if (!isLoggedIn()) { console.error("Not signed in."); process.exit(1); }
+
+    const myListings = await getMyListings();
+    if (!myListings.ok) { console.error("Failed to fetch listings"); process.exit(1); }
+
+    const listing = myListings.data.find((l: any) => l.domain === domain && !l.verified);
+    if (!listing) { console.error(`No unverified listing found for ${domain}`); process.exit(1); }
+
+    console.log(`\nVerifying ${domain}...`);
+    const result = await verifyListingApi(listing.id);
+    if (result.ok && result.data.verified) {
+      console.log(`✓ Verified via ${result.data.method}! Listing is now active.\n`);
+    } else {
+      console.error(`✗ ${result.data.error || "Verification failed"}`);
+      console.error(`  Make sure your DNS TXT record, HTTP file, or meta tag is set up.\n`);
+      process.exit(1);
+    }
+  });
+
+market
+  .command("offer")
+  .description("Make an offer on a listing")
+  .requiredOption("-l, --listing <id>", "Listing ID")
+  .requiredOption("-a, --amount <price>", "Offer amount")
+  .option("-m, --message <msg>", "Message to seller")
+  .action(async (opts: any) => {
+    const { isLoggedIn, makeOffer } = await import("./market-client.js");
+    if (!isLoggedIn()) { console.error("Not signed in."); process.exit(1); }
+
+    const result = await makeOffer(parseInt(opts.listing, 10), parseFloat(opts.amount), opts.message || "");
+    if (result.ok) {
+      console.log(`\n✓ Offer of $${opts.amount} submitted on listing #${opts.listing}\n`);
+    } else {
+      console.error(`✗ ${result.data?.error || "Failed"}\n`);
+      process.exit(1);
+    }
+  });
+
+market
+  .command("my-listings")
+  .description("Show your listings")
+  .option("--json", "Output as JSON")
+  .action(async (opts: any) => {
+    const { isLoggedIn, getMyListings } = await import("./market-client.js");
+    if (!isLoggedIn()) { console.error("Not signed in."); process.exit(1); }
+
+    const result = await getMyListings();
+    if (!result.ok) { console.error("Failed"); process.exit(1); }
+    if (opts.json) { console.log(JSON.stringify(result.data, null, 2)); return; }
+
+    const listings = result.data;
+    console.log(`\nYour Listings (${listings.length}):\n`);
+    for (const l of listings) {
+      console.log(`  #${l.id}  ${l.domain.padEnd(25)} $${l.asking_price}  ${l.status}  ${l.verified ? "✓ verified" : "unverified"}`);
+    }
+    console.log();
+  });
+
+market
+  .command("my-offers")
+  .description("Show offers you've made or received")
+  .option("--role <role>", "buyer or seller", "buyer")
+  .option("--json", "Output as JSON")
+  .action(async (opts: any) => {
+    const { isLoggedIn, getMyOffers } = await import("./market-client.js");
+    if (!isLoggedIn()) { console.error("Not signed in."); process.exit(1); }
+
+    const result = await getMyOffers(opts.role);
+    if (!result.ok) { console.error("Failed"); process.exit(1); }
+    if (opts.json) { console.log(JSON.stringify(result.data, null, 2)); return; }
+
+    const offers = result.data;
+    console.log(`\nYour Offers as ${opts.role} (${offers.length}):\n`);
+    for (const o of offers) {
+      console.log(`  #${o.id}  ${o.domain.padEnd(25)} $${o.amount}  ${o.status}`);
+    }
+    console.log();
+  });
+
+market
+  .command("stats")
+  .description("Show marketplace statistics")
+  .option("--json", "Output as JSON")
+  .action(async (opts: any) => {
+    const { getMarketStatsApi } = await import("./market-client.js");
+    const result = await getMarketStatsApi();
+    if (!result.ok) { console.error("Cannot reach marketplace server"); process.exit(1); }
+    if (opts.json) { console.log(JSON.stringify(result.data, null, 2)); return; }
+
+    const s = result.data;
+    console.log(`\n◆ Marketplace Stats`);
+    console.log(`  Total listings: ${s.totalListings}`);
+    console.log(`  Active:         ${s.activeListings}`);
+    console.log(`  Total offers:   ${s.totalOffers}`);
+    console.log(`  Users:          ${s.totalUsers}\n`);
+  });
+
 program.parse();
 
 // ─── Types ───────────────────────────────────────────────
