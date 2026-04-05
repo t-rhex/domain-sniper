@@ -468,6 +468,9 @@ export function getUserOffers(
   userId: string,
   role: "buyer" | "seller",
 ): OfferWithListingRow[] {
+  if (role !== "buyer" && role !== "seller") {
+    throw new Error("Invalid role parameter");
+  }
   const col = role === "buyer" ? "buyer_id" : "seller_id";
   return getMarketDb()
     .query(

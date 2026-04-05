@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, chmodSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { execFileSync } from "child_process";
@@ -29,6 +29,7 @@ export function generateCA(): { keyPath: string; certPath: string } {
   execFileSync("openssl", [
     "genrsa", "-out", CA_KEY, "2048",
   ], { stdio: "pipe" });
+  chmodSync(CA_KEY, 0o600);
 
   // Generate CA certificate (valid for 10 years)
   execFileSync("openssl", [
@@ -41,10 +42,16 @@ export function generateCA(): { keyPath: string; certPath: string } {
 }
 
 export function generateHostCert(hostname: string): { key: string; cert: string } {
+  // Validate hostname format
+  const HOSTNAME_RE = /^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$/i;
+  if (!HOSTNAME_RE.test(hostname)) {
+    throw new Error(`Invalid hostname: ${hostname}`);
+  }
+
   ensureDirs();
   if (!hasCA()) generateCA();
 
-  // Sanitize hostname for filename
+  // Sanitize hostname for filename and openssl arguments
   const safe = hostname.replace(/[^a-z0-9.-]/gi, "_");
   const hostKey = join(CERTS_DIR, `${safe}.key`);
   const hostCert = join(CERTS_DIR, `${safe}.crt`);
@@ -58,11 +65,12 @@ export function generateHostCert(hostname: string): { key: string; cert: string 
 
   // Generate host key
   execFileSync("openssl", ["genrsa", "-out", hostKey, "2048"], { stdio: "pipe" });
+  chmodSync(hostKey, 0o600);
 
   // Generate CSR
   execFileSync("openssl", [
     "req", "-new", "-key", hostKey, "-out", hostCsr,
-    "-subj", `/CN=${hostname}`,
+    "-subj", `/CN=${safe}`,
   ], { stdio: "pipe" });
 
   // Create extensions file for SAN
@@ -70,7 +78,7 @@ export function generateHostCert(hostname: string): { key: string; cert: string 
     "authorityKeyIdentifier=keyid,issuer",
     "basicConstraints=CA:FALSE",
     "keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment",
-    `subjectAltName = DNS:${hostname}, DNS:*.${hostname}`,
+    `subjectAltName = DNS:${safe}, DNS:*.${safe}`,
   ].join("\n"), "utf-8");
 
   // Sign with CA

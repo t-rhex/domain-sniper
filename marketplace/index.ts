@@ -73,6 +73,7 @@ function getAllowedOrigin(req: Request): string {
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
   "X-XSS-Protection": "1; mode=block",
@@ -102,6 +103,14 @@ function unauthorized(req?: Request): Response {
   return json({ error: "Unauthorized" }, 401, req);
 }
 
+// Validate that a URL uses http or https protocol (blocks javascript: URIs, etc.)
+function isValidUrl(input: string): boolean {
+  try {
+    const u = new URL(input);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch { return false; }
+}
+
 // Sanitize user input to prevent XSS
 function sanitize(input: string): string {
   return input
@@ -128,9 +137,15 @@ const VALID_OFFER_STATUSES_BUYER: string[] = ["withdrawn"];
 // ─── Rate Limiting (Redis-backed, in-memory fallback) ───
 
 function getClientIp(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || req.headers.get("x-real-ip")
-    || "unknown";
+  // In production behind Railway's proxy, X-Forwarded-For is set by the load balancer.
+  // For direct exposure, set TRUST_PROXY=false to use a connection-level IP.
+  if (process.env.TRUST_PROXY !== "false") {
+    const xff = req.headers.get("x-forwarded-for");
+    if (xff) return xff.split(",")[0]!.trim();
+    const realIp = req.headers.get("x-real-ip");
+    if (realIp) return realIp;
+  }
+  return "unknown";
 }
 
 function rateLimited(resetIn: number): Response {
@@ -149,6 +164,7 @@ function rateLimited(resetIn: number): Response {
 Bun.serve({
   port: PORT,
   async fetch(req) {
+    try {
     const url = new URL(req.url);
     const method = req.method;
 
@@ -409,9 +425,10 @@ Bun.serve({
     // GET /api/my/offers -- My offers (as buyer or seller)
     if (method === "GET" && url.pathname === "/api/my/offers") {
       if (!session) return unauthorized(req);
-      const role = (url.searchParams.get("role") || "buyer") as
-        | "buyer"
-        | "seller";
+      const role = url.searchParams.get("role") || "buyer";
+      if (role !== "buyer" && role !== "seller") {
+        return json({ error: "role must be 'buyer' or 'seller'" }, 400, req);
+      }
       return json(getUserOffers(session.user.id, role), 200, req);
     }
 
@@ -561,7 +578,12 @@ Bun.serve({
       };
       const safeDisplayName = body.displayName ? sanitize(body.displayName) : undefined;
       const safeBio = body.bio ? sanitize(body.bio) : undefined;
-      const safeWebsite = body.website ? sanitize(body.website) : undefined;
+      const safeWebsite = body.website !== undefined
+        ? (body.website ? sanitize(body.website) : "")
+        : undefined;
+      if (safeWebsite && !isValidUrl(safeWebsite)) {
+        return json({ error: "website must be a valid http/https URL" }, 400, req);
+      }
       updateProfile(session.user.id, {
         displayName: safeDisplayName,
         bio: safeBio,
@@ -596,6 +618,13 @@ Bun.serve({
     }
 
     return json({ error: "Not found" }, 404, req);
+    } catch (err: unknown) {
+      console.error("Unhandled error:", err);
+      const message = process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production"
+        ? "Internal server error"
+        : err instanceof Error ? err.message : "Internal server error";
+      return json({ error: message }, 500, req);
+    }
   },
 });
 

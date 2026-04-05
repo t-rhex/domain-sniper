@@ -33,6 +33,7 @@ export function startProxy(config: ProxyConfig): { stop: () => void } {
 
   const server = Bun.serve({
     port,
+    hostname: "127.0.0.1",  // Only bind to localhost — never expose on public interface
     async fetch(req) {
       const url = new URL(req.url);
       const host = url.hostname || req.headers.get("host")?.split(":")[0] || "";
@@ -129,7 +130,8 @@ export function startProxy(config: ProxyConfig): { stop: () => void } {
     },
   });
 
-  console.log(`\n◆ Domain Sniper Proxy running on http://localhost:${port}`);
+  console.log(`\n◆ Domain Sniper Proxy running on http://127.0.0.1:${port}`);
+  console.log(`  ⚠ Bound to localhost only — do not expose on a public interface`);
   console.log(`  HTTPS interception: ${httpsInterception ? "ON (CA cert required)" : "OFF"}`);
   if (filterHosts && filterHosts.length > 0) {
     console.log(`  Filtering: ${filterHosts.join(", ")}`);
