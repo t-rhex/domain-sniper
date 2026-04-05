@@ -32,7 +32,7 @@ import {
   verifyDomainOwnership,
 } from "./verify.js";
 
-const PORT = parseInt(process.env.MARKET_PORT || "3000", 10);
+const PORT = parseInt(process.env.PORT || process.env.MARKET_PORT || "3000", 10);
 
 // ─── Auth middleware ─────────────────────────────────────
 

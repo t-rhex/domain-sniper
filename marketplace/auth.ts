@@ -4,7 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync } from "fs";
 
-const APP_DIR = join(homedir(), ".domain-sniper");
+const APP_DIR = process.env.DATA_DIR || join(homedir(), ".domain-sniper");
 const AUTH_DB_FILE = join(APP_DIR, "auth.db");
 
 if (!existsSync(APP_DIR)) mkdirSync(APP_DIR, { recursive: true });

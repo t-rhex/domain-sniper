@@ -3,7 +3,7 @@ import { mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
-const APP_DIR = join(homedir(), ".domain-sniper");
+const APP_DIR = process.env.DATA_DIR || join(homedir(), ".domain-sniper");
 const MARKET_DB_FILE = join(APP_DIR, "marketplace.db");
 
 let _db: Database | null = null;
