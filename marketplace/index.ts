@@ -1,4 +1,5 @@
 import { auth, migrateAuth } from "./auth.js";
+import { checkRateLimit, cacheGet, cacheSet, getRedis, isRedisAvailable } from "./redis.js";
 
 // Run auth migrations before starting server
 await migrateAuth();
@@ -63,61 +64,12 @@ function unauthorized(): Response {
   return json({ error: "Unauthorized" }, 401);
 }
 
-// ─── Rate Limiter ────────────────────────────────────────
-
-interface RateLimitEntry {
-  count: number;
-  resetAt: number;
-}
-
-const rateLimits = new Map<string, RateLimitEntry>();
-
-// Clean up expired entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of rateLimits) {
-    if (entry.resetAt < now) rateLimits.delete(key);
-  }
-}, 300000);
-
-interface RateLimitConfig {
-  windowMs: number;
-  maxRequests: number;
-}
-
-const RATE_LIMITS: Record<string, RateLimitConfig> = {
-  // Auth: strict — prevent brute force
-  "auth": { windowMs: 900000, maxRequests: 10 },        // 10 attempts per 15 min
-  // Writes: moderate — prevent spam
-  "write": { windowMs: 60000, maxRequests: 20 },         // 20 writes per minute
-  // Reads: generous — allow browsing
-  "read": { windowMs: 60000, maxRequests: 100 },         // 100 reads per minute
-  // Global fallback
-  "global": { windowMs: 60000, maxRequests: 200 },       // 200 total per minute
-};
+// ─── Rate Limiting (Redis-backed, in-memory fallback) ───
 
 function getClientIp(req: Request): string {
   return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     || req.headers.get("x-real-ip")
     || "unknown";
-}
-
-function checkRateLimit(ip: string, bucket: string): { allowed: boolean; remaining: number; resetIn: number } {
-  const config = RATE_LIMITS[bucket] || RATE_LIMITS["global"]!;
-  const key = `${ip}:${bucket}`;
-  const now = Date.now();
-
-  let entry = rateLimits.get(key);
-  if (!entry || entry.resetAt < now) {
-    entry = { count: 0, resetAt: now + config.windowMs };
-    rateLimits.set(key, entry);
-  }
-
-  entry.count++;
-  const remaining = Math.max(0, config.maxRequests - entry.count);
-  const resetIn = Math.ceil((entry.resetAt - now) / 1000);
-
-  return { allowed: entry.count <= config.maxRequests, remaining, resetIn };
 }
 
 function rateLimited(resetIn: number): Response {
@@ -159,11 +111,11 @@ Bun.serve({
     const bucket = isAuthRoute ? "auth" : isWriteRoute ? "write" : "read";
 
     // Check global limit first
-    const globalCheck = checkRateLimit(clientIp, "global");
+    const globalCheck = await checkRateLimit(clientIp, "global");
     if (!globalCheck.allowed) return rateLimited(globalCheck.resetIn);
 
     // Check bucket-specific limit
-    const bucketCheck = checkRateLimit(clientIp, bucket);
+    const bucketCheck = await checkRateLimit(clientIp, bucket);
     if (!bucketCheck.allowed) return rateLimited(bucketCheck.resetIn);
 
     // Better Auth routes
@@ -173,8 +125,17 @@ Bun.serve({
 
     // ─── Public routes ─────────────────────────────────
 
-    // GET /api/listings -- Browse listings
+    // GET /api/listings -- Browse listings (with caching)
     if (method === "GET" && url.pathname === "/api/listings") {
+      const cacheKey = `listings:${url.search}`;
+      const cached = await cacheGet(cacheKey);
+      if (cached) {
+        return new Response(cached, {
+          status: 200,
+          headers: { "Content-Type": "application/json", "X-Cache": "HIT", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+
       const search = url.searchParams.get("q") || undefined;
       const category = url.searchParams.get("category") || undefined;
       const minPrice = url.searchParams.get("min")
@@ -198,7 +159,12 @@ Bun.serve({
         limit,
         offset,
       });
-      return json(result);
+      const body = JSON.stringify(result);
+      await cacheSet(cacheKey, body, 30);
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Cache": "MISS", "Access-Control-Allow-Origin": "*" },
+      });
     }
 
     // GET /api/listings/:id -- View listing
@@ -211,9 +177,22 @@ Bun.serve({
       return json({ listing, offerCount: offers.length });
     }
 
-    // GET /api/stats -- Market stats
+    // GET /api/stats -- Market stats (with caching)
     if (method === "GET" && url.pathname === "/api/stats") {
-      return json(getMarketStats());
+      const cached = await cacheGet("market:stats");
+      if (cached) {
+        return new Response(cached, {
+          status: 200,
+          headers: { "Content-Type": "application/json", "X-Cache": "HIT", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+      const stats = getMarketStats();
+      const body = JSON.stringify(stats);
+      await cacheSet("market:stats", body, 60);
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Cache": "MISS", "Access-Control-Allow-Origin": "*" },
+      });
     }
 
     // GET /api/profile/:userId -- Public profile
@@ -495,10 +474,14 @@ Bun.serve({
   },
 });
 
+// Try connecting to Redis on startup
+await getRedis();
+
 const startupMessage = `
 Domain Sniper Marketplace running on http://localhost:${PORT}
-  Auth: POST /api/auth/sign-up/email, POST /api/auth/sign-in/email
-  API:  GET /api/listings, POST /api/listings, POST /api/offers
-  Docs: GET /api/stats
+  Auth:  POST /api/auth/sign-up/email, POST /api/auth/sign-in/email
+  API:   GET /api/listings, POST /api/listings, POST /api/offers
+  Stats: GET /api/stats
+  Redis: ${isRedisAvailable() ? "connected" : "in-memory fallback"}
 `;
 process.stdout.write(startupMessage);
