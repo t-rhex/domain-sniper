@@ -43,7 +43,7 @@ const program = new Command();
 program
   .name("dsniper")
   .description("All-in-one domain intelligence toolkit — availability checker, security recon, portfolio manager")
-  .version("0.1.2")
+  .version("0.1.3")
   .argument("[domains...]", "Domain(s) to check")
   .option("-f, --file <path>", "Path to file with domains (one per line)")
   .option("-a, --auto-register", "Automatically register available domains", false)
