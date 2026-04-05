@@ -871,18 +871,26 @@ market
   .command("signup")
   .description("Create a marketplace account")
   .option("--server <url>", "Marketplace server URL", "http://localhost:3000")
-  .action(async (opts: { server: string }) => {
+  .option("--email <email>", "Email address")
+  .option("--password <password>", "Password (min 8 chars)")
+  .option("--name <name>", "Display name")
+  .action(async (opts: { server: string; email?: string; password?: string; name?: string }) => {
     const { signUp } = await import("./market-client.js");
-    const readline = await import("readline");
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+    let name = opts.name;
+    let email = opts.email;
+    let password = opts.password;
 
-    const name = await ask("Name: ");
-    const email = await ask("Email: ");
-    const password = await ask("Password (min 8 chars): ");
-    rl.close();
+    if (!name || !email || !password) {
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+      if (!name) name = await ask("Name: ");
+      if (!email) email = await ask("Email: ");
+      if (!password) password = await ask("Password (min 8 chars): ");
+      rl.close();
+    }
 
-    const result = await signUp(email, password, name, opts.server);
+    const result = await signUp(email!, password!, name!, opts.server);
     if (result.success) {
       console.log(`\n✓ Account created. Signed in as ${email}\n`);
     } else {
@@ -895,17 +903,23 @@ market
   .command("login")
   .description("Sign in to the marketplace")
   .option("--server <url>", "Marketplace server URL", "http://localhost:3000")
-  .action(async (opts: { server: string }) => {
+  .option("--email <email>", "Email address")
+  .option("--password <password>", "Password")
+  .action(async (opts: { server: string; email?: string; password?: string }) => {
     const { signIn } = await import("./market-client.js");
-    const readline = await import("readline");
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+    let email = opts.email;
+    let password = opts.password;
 
-    const email = await ask("Email: ");
-    const password = await ask("Password: ");
-    rl.close();
+    if (!email || !password) {
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+      if (!email) email = await ask("Email: ");
+      if (!password) password = await ask("Password: ");
+      rl.close();
+    }
 
-    const result = await signIn(email, password, opts.server);
+    const result = await signIn(email!, password!, opts.server);
     if (result.success) {
       console.log(`\n✓ Signed in as ${email}\n`);
     } else {
