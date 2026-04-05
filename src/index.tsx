@@ -550,6 +550,68 @@ program
     }
 
     console.log(`${d}Scan complete.${x}\n`);
+
+    // Clean up database connection
+    try {
+      const { closeDb: closeReconDb } = await import("./db.js");
+      closeReconDb();
+    } catch {}
+  });
+
+// ─── Database management subcommand ─────────────────────
+
+program
+  .command("db")
+  .description("Database management")
+  .option("--stats", "Show database statistics")
+  .option("--clear-cache", "Clear all cached scan results")
+  .option("--import-legacy", "Import data from legacy JSON files")
+  .option("--history <domain>", "Show scan history for a domain")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { stats?: boolean; clearCache?: boolean; importLegacy?: boolean; history?: string; json?: boolean }) => {
+    const { getDbStats, clearCache, importLegacyPortfolio, importLegacySessions, getScanHistory, closeDb } = await import("./db.js");
+    const { PORTFOLIO_FILE, SESSION_DIR } = await import("./paths.js");
+
+    if (opts.clearCache) {
+      const count = clearCache();
+      console.log(`Cleared ${count} cached entries`);
+      closeDb();
+      return;
+    }
+
+    if (opts.importLegacy) {
+      const portfolioCount = importLegacyPortfolio(PORTFOLIO_FILE);
+      const sessionCount = importLegacySessions(SESSION_DIR);
+      console.log(`Imported: ${portfolioCount} portfolio domains, ${sessionCount} sessions`);
+      closeDb();
+      return;
+    }
+
+    if (opts.history) {
+      const history = getScanHistory(opts.history, 20);
+      if (opts.json) { console.log(JSON.stringify(history, null, 2)); closeDb(); return; }
+      console.log(`\nScan history for ${opts.history} (${history.length} scans):\n`);
+      for (const h of history) {
+        console.log(`  ${h.scanned_at}  ${h.status}${h.score ? `  score: ${h.score}` : ""}`);
+      }
+      console.log();
+      closeDb();
+      return;
+    }
+
+    // Default: show stats
+    const stats = getDbStats();
+    if (opts.json) { console.log(JSON.stringify(stats, null, 2)); closeDb(); return; }
+    console.log(`\nDatabase Statistics:`);
+    console.log(`  Domains tracked: ${stats.totalDomains}`);
+    console.log(`  Total scans: ${stats.totalScans}`);
+    console.log(`  Sessions: ${stats.totalSessions}`);
+    console.log(`  Portfolio: ${stats.portfolioSize}`);
+    console.log(`  WHOIS snapshots: ${stats.whoisSnapshots}`);
+    console.log(`  Cache entries: ${stats.cacheEntries}`);
+    console.log(`  Database size: ${(stats.dbSizeBytes / 1024).toFixed(1)} KB`);
+    console.log();
+    closeDb();
   });
 
 program.parse();
@@ -965,4 +1027,10 @@ async function runHeadless(domains: string[], options: CliOptions) {
   } else {
     console.log("Done!\n");
   }
+
+  // Clean up database connection
+  try {
+    const { closeDb } = await import("./db.js");
+    closeDb();
+  } catch {}
 }
