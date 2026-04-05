@@ -41,9 +41,9 @@ import type { CorsResult } from "./core/features/cors-check.js";
 const program = new Command();
 
 program
-  .name("domain-sniper")
-  .description("Check domain availability, detect expired domains, and auto-register them")
-  .version("2.0.0")
+  .name("dsniper")
+  .description("All-in-one domain intelligence toolkit — availability checker, security recon, portfolio manager")
+  .version("0.1.0")
   .argument("[domains...]", "Domain(s) to check")
   .option("-f, --file <path>", "Path to file with domains (one per line)")
   .option("-a, --auto-register", "Automatically register available domains", false)

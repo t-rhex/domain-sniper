@@ -1,0 +1,25 @@
+# Tests
+tests/
+
+# Docs (README included via files)
+docs/
+
+# Dev files
+.claude/
+.github/
+marketplace/
+Dockerfile
+.dockerignore
+bun.lock
+
+# Build artifacts
+domain-sniper
+domain-sniper-*
+dsniper
+dsniper-*
+*.exe
+
+# Data
+*.db
+.env
+.env.*
