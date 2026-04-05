@@ -2,9 +2,18 @@ import { assertValidDomain } from "../validate.js";
 import type { HttpProbeResult } from "../types.js";
 
 const PARKED_INDICATORS = [
-  "parked", "for sale", "buy this domain", "domain parking",
-  "godaddy", "sedo", "afternic", "hugedomains", "dan.com",
-  "this domain is for sale", "under construction",
+  "this domain is parked",
+  "domain is for sale",
+  "buy this domain",
+  "domain parking",
+  "this domain may be for sale",
+  "hugedomains.com",
+  "dan.com/buy-domain",
+  "this domain is for sale",
+  "under construction",
+  "parked by",
+  "domain has expired",
+  "renew this domain",
 ];
 
 export async function httpProbe(domain: string): Promise<HttpProbeResult> {

@@ -83,14 +83,14 @@ function parseWhoisResponse(domain: string, raw: string): WhoisResult {
       result.registrar = line.split(":").slice(1).join(":").trim();
     }
 
-    // Created date
+    // Created date — prefer "Creation Date:" (registrar-level) over "created:" (TLD-level)
     if (
-      !result.createdDate &&
-      (lower.startsWith("creation date:") ||
-        lower.startsWith("created:") ||
-        lower.startsWith("created date:") ||
-        lower.startsWith("registration date:"))
+      lower.startsWith("creation date:") ||
+      lower.startsWith("created date:") ||
+      lower.startsWith("registration date:")
     ) {
+      result.createdDate = line.split(":").slice(1).join(":").trim();
+    } else if (!result.createdDate && lower.startsWith("created:")) {
       result.createdDate = line.split(":").slice(1).join(":").trim();
     }
 
