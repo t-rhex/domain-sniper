@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { expandTlds, POPULAR_TLDS, PREMIUM_TLDS, STARTUP_TLDS } from "../src/features/tld-expand.js";
+import { expandTlds, POPULAR_TLDS, PREMIUM_TLDS, STARTUP_TLDS } from "../src/core/features/tld-expand.js";
 
 describe("expandTlds", () => {
   test("expands base name across popular TLDs", () => {

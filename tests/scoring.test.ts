@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { scoreDomain, scoreGrade } from "../src/features/scoring.js";
+import { scoreDomain, scoreGrade } from "../src/core/features/scoring.js";
 
 describe("scoreDomain", () => {
   test("scores short .com domains highest", () => {

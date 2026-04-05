@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { APP_DIR, CONFIG_FILE, PORTFOLIO_FILE, SESSION_DIR, WHOIS_HISTORY_DIR } from "../src/paths.js";
+import { APP_DIR, CONFIG_FILE, PORTFOLIO_FILE, SESSION_DIR, WHOIS_HISTORY_DIR } from "../src/core/paths.js";
 import { homedir } from "os";
 
 describe("shared paths", () => {

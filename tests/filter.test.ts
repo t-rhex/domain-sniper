@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test";
-import { filterDomains, nextStatus, nextSort, DEFAULT_FILTER } from "../src/features/filter.js";
-import { createEmptyEntry } from "../src/types.js";
-import type { DomainEntry } from "../src/types.js";
+import { filterDomains, nextStatus, nextSort, DEFAULT_FILTER } from "../src/core/features/filter.js";
+import { createEmptyEntry } from "../src/core/types.js";
+import type { DomainEntry } from "../src/core/types.js";
 
 function makeEntry(domain: string, status: DomainEntry["status"]): DomainEntry {
   return { ...createEmptyEntry(domain), status };

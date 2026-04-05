@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { generateSuggestions } from "../src/features/domain-suggest.js";
+import { generateSuggestions } from "../src/core/features/domain-suggest.js";
 
 describe("generateSuggestions", () => {
   test("generates suggestions from keyword", () => {

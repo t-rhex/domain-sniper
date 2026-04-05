@@ -27,8 +27,8 @@ import {
   clearCache,
   clearExpiredCache,
   getDbStats,
-} from "../src/db.js";
-import { createEmptyEntry } from "../src/types.js";
+} from "../src/core/db.js";
+import { createEmptyEntry } from "../src/core/types.js";
 
 // These tests use the real singleton DB.
 // Each test uses unique domain names to avoid conflicts.

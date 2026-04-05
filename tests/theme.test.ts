@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
-import { statusStyle, theme, palette } from "../src/theme.js";
-import type { DomainStatus } from "../src/theme.js";
+import { statusStyle, theme, palette } from "../src/core/theme.js";
+import type { DomainStatus } from "../src/core/theme.js";
 
 describe("statusStyle", () => {
   const allStatuses: DomainStatus[] = ["pending", "checking", "available", "expired", "taken", "error", "registered", "registering"];

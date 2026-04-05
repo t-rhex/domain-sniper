@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { isValidDomain, assertValidDomain, sanitizeDomainList, isValidSessionId, safePath } from "../src/validate.js";
+import { isValidDomain, assertValidDomain, sanitizeDomainList, isValidSessionId, safePath } from "../src/core/validate.js";
 
 describe("isValidDomain", () => {
   test("accepts valid domains", () => {

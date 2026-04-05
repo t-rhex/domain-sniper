@@ -3,40 +3,40 @@ import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { App } from "./app.js";
 import { Command } from "commander";
-import { lookupDns } from "./features/dns-details.js";
-import { httpProbe } from "./features/http-probe.js";
-import { checkWayback } from "./features/wayback.js";
-import { calculateDomainAge } from "./features/domain-age.js";
-import { sanitizeDomainList, safePath } from "./validate.js";
+import { lookupDns } from "./core/features/dns-details.js";
+import { httpProbe } from "./core/features/http-probe.js";
+import { checkWayback } from "./core/features/wayback.js";
+import { calculateDomainAge } from "./core/features/domain-age.js";
+import { sanitizeDomainList, safePath } from "./core/validate.js";
 import { bashCompletions, zshCompletions, fishCompletions } from "./completions.js";
-import { checkSocialMedia } from "./features/social-check.js";
-import { detectTechStack } from "./features/tech-stack.js";
-import { checkBlacklists } from "./features/blacklist-check.js";
-import { estimateBacklinks } from "./features/backlinks.js";
-import { scanPorts } from "./features/port-scanner.js";
-import { reverseIpLookup } from "./features/reverse-ip.js";
-import { lookupAsn } from "./features/asn-lookup.js";
-import { checkEmailSecurity } from "./features/email-security.js";
-import { checkZoneTransfer } from "./features/zone-transfer.js";
-import { queryCertTransparency } from "./features/cert-transparency.js";
-import { detectTakeover } from "./features/takeover-detect.js";
-import { auditSecurityHeaders } from "./features/security-headers.js";
-import { detectWaf } from "./features/waf-detect.js";
-import { scanPaths } from "./features/path-scanner.js";
-import { checkCors } from "./features/cors-check.js";
-import { rdapLookup } from "./features/rdap.js";
-import { checkSsl } from "./features/ssl-check.js";
-import type { PortScanResult } from "./features/port-scanner.js";
-import type { ReverseIpResult } from "./features/reverse-ip.js";
-import type { AsnResult } from "./features/asn-lookup.js";
-import type { EmailSecurityResult } from "./features/email-security.js";
-import type { ZoneTransferResult } from "./features/zone-transfer.js";
-import type { CertTransparencyResult } from "./features/cert-transparency.js";
-import type { TakeoverResult } from "./features/takeover-detect.js";
-import type { SecurityHeadersResult } from "./features/security-headers.js";
-import type { WafResult } from "./features/waf-detect.js";
-import type { PathScanResult } from "./features/path-scanner.js";
-import type { CorsResult } from "./features/cors-check.js";
+import { checkSocialMedia } from "./core/features/social-check.js";
+import { detectTechStack } from "./core/features/tech-stack.js";
+import { checkBlacklists } from "./core/features/blacklist-check.js";
+import { estimateBacklinks } from "./core/features/backlinks.js";
+import { scanPorts } from "./core/features/port-scanner.js";
+import { reverseIpLookup } from "./core/features/reverse-ip.js";
+import { lookupAsn } from "./core/features/asn-lookup.js";
+import { checkEmailSecurity } from "./core/features/email-security.js";
+import { checkZoneTransfer } from "./core/features/zone-transfer.js";
+import { queryCertTransparency } from "./core/features/cert-transparency.js";
+import { detectTakeover } from "./core/features/takeover-detect.js";
+import { auditSecurityHeaders } from "./core/features/security-headers.js";
+import { detectWaf } from "./core/features/waf-detect.js";
+import { scanPaths } from "./core/features/path-scanner.js";
+import { checkCors } from "./core/features/cors-check.js";
+import { rdapLookup } from "./core/features/rdap.js";
+import { checkSsl } from "./core/features/ssl-check.js";
+import type { PortScanResult } from "./core/features/port-scanner.js";
+import type { ReverseIpResult } from "./core/features/reverse-ip.js";
+import type { AsnResult } from "./core/features/asn-lookup.js";
+import type { EmailSecurityResult } from "./core/features/email-security.js";
+import type { ZoneTransferResult } from "./core/features/zone-transfer.js";
+import type { CertTransparencyResult } from "./core/features/cert-transparency.js";
+import type { TakeoverResult } from "./core/features/takeover-detect.js";
+import type { SecurityHeadersResult } from "./core/features/security-headers.js";
+import type { WafResult } from "./core/features/waf-detect.js";
+import type { PathScanResult } from "./core/features/path-scanner.js";
+import type { CorsResult } from "./core/features/cors-check.js";
 
 const program = new Command();
 
@@ -54,7 +54,7 @@ program
   .action(async (domains: string[], options: CliOptions) => {
     // Stdin pipe support: read from stdin when no TTY and no domains/file provided
     if (!process.stdin.isTTY && domains.length === 0 && !options.file) {
-      const { parseDomainList } = await import("./whois.js");
+      const { parseDomainList } = await import("./core/whois.js");
       const chunks: Buffer[] = [];
       for await (const chunk of process.stdin) {
         chunks.push(chunk as Buffer);
@@ -115,11 +115,11 @@ program
   .option("-n, --count <n>", "Number of suggestions", "20")
   .option("--check", "Check availability of suggestions", false)
   .action(async (keyword: string, opts: { tld: string; count: string; check: boolean }) => {
-    const { generateSuggestions } = await import("./features/domain-suggest.js");
+    const { generateSuggestions } = await import("./core/features/domain-suggest.js");
     const suggestions = generateSuggestions(keyword, opts.tld, parseInt(opts.count, 10));
 
     if (opts.check) {
-      const { whoisLookup } = await import("./whois.js");
+      const { whoisLookup } = await import("./core/whois.js");
       console.log(`\nChecking ${suggestions.length} suggestions for "${keyword}"...\n`);
       for (const s of suggestions) {
         const whois = await whoisLookup(s.domain);
@@ -172,14 +172,14 @@ program
     dashboard?: boolean; stats?: boolean; json?: boolean;
   }) => {
     if (opts.add) {
-      const { addToPortfolio } = await import("./features/portfolio.js");
+      const { addToPortfolio } = await import("./core/features/portfolio.js");
       addToPortfolio(opts.add);
       console.log(`Added ${opts.add} to portfolio`);
       return;
     }
 
     if (opts.remove) {
-      const { removeFromPortfolio } = await import("./features/portfolio.js");
+      const { removeFromPortfolio } = await import("./core/features/portfolio.js");
       removeFromPortfolio(opts.remove);
       console.log(`Removed ${opts.remove} from portfolio`);
       return;
@@ -188,7 +188,7 @@ program
     if (opts.status) {
       const [domain, status] = opts.status.split(":");
       if (!domain || !status) { console.error("Usage: --status domain.com:active"); process.exit(1); }
-      const { updatePortfolioStatus } = await import("./db.js");
+      const { updatePortfolioStatus } = await import("./core/db.js");
       updatePortfolioStatus(domain, status as any);
       console.log(`Set ${domain} status to ${status}`);
       return;
@@ -197,7 +197,7 @@ program
     if (opts.category) {
       const [domain, category] = opts.category.split(":");
       if (!domain || !category) { console.error("Usage: --category domain.com:investments"); process.exit(1); }
-      const { updatePortfolioCategory } = await import("./db.js");
+      const { updatePortfolioCategory } = await import("./core/db.js");
       updatePortfolioCategory(domain, category);
       console.log(`Set ${domain} category to ${category}`);
       return;
@@ -206,7 +206,7 @@ program
     if (opts.value) {
       const [domain, amountStr] = opts.value.split(":");
       if (!domain || !amountStr) { console.error("Usage: --value domain.com:5000"); process.exit(1); }
-      const { updatePortfolioValue } = await import("./db.js");
+      const { updatePortfolioValue } = await import("./core/db.js");
       updatePortfolioValue(domain, parseFloat(amountStr));
       console.log(`Set ${domain} estimated value to $${amountStr}`);
       return;
@@ -216,14 +216,14 @@ program
       const parts = opts.transaction.split(":");
       if (parts.length < 3) { console.error("Usage: --transaction domain.com:purchase:9.99"); process.exit(1); }
       const [domain, type, amountStr] = parts;
-      const { addTransaction } = await import("./db.js");
+      const { addTransaction } = await import("./core/db.js");
       addTransaction(domain!, type as any, parseFloat(amountStr!));
       console.log(`Recorded ${type} of $${amountStr} for ${domain}`);
       return;
     }
 
     if (opts.expiring !== undefined) {
-      const { getPortfolioExpiring, closeDb } = await import("./db.js");
+      const { getPortfolioExpiring, closeDb } = await import("./core/db.js");
       const days = parseInt(String(opts.expiring) || "30", 10) || 30;
       const expiring = getPortfolioExpiring(days);
       if (opts.json) { console.log(JSON.stringify(expiring, null, 2)); closeDb(); return; }
@@ -236,7 +236,7 @@ program
     }
 
     if (opts.renewals) {
-      const { generateRenewalCalendar, estimateAnnualRenewalCost } = await import("./features/portfolio-monitor.js");
+      const { generateRenewalCalendar, estimateAnnualRenewalCost } = await import("./core/features/portfolio-monitor.js");
       const calendar = generateRenewalCalendar(12);
       const annualCost = estimateAnnualRenewalCost();
       if (opts.json) { console.log(JSON.stringify({ calendar, annualCost }, null, 2)); return; }
@@ -251,7 +251,7 @@ program
     }
 
     if (opts.health) {
-      const { runPortfolioHealthCheck } = await import("./features/portfolio-monitor.js");
+      const { runPortfolioHealthCheck } = await import("./core/features/portfolio-monitor.js");
       console.log("\nRunning portfolio health check...\n");
       const report = await runPortfolioHealthCheck((domain, i, total) => {
         process.stdout.write(`\r  Checking ${i + 1}/${total}: ${domain}...`);
@@ -275,7 +275,7 @@ program
     }
 
     if (opts.pnl !== undefined) {
-      const { getDomainPnL, getPortfolioPnL } = await import("./db.js");
+      const { getDomainPnL, getPortfolioPnL } = await import("./core/db.js");
       if (typeof opts.pnl === "string") {
         const pnl = getDomainPnL(opts.pnl);
         if (opts.json) { console.log(JSON.stringify(pnl, null, 2)); return; }
@@ -296,7 +296,7 @@ program
     }
 
     if (opts.monthly !== undefined) {
-      const { getMonthlyReport } = await import("./db.js");
+      const { getMonthlyReport } = await import("./core/db.js");
       const months = typeof opts.monthly === "string" ? parseInt(opts.monthly, 10) : 12;
       const report = getMonthlyReport(months);
       if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
@@ -311,7 +311,7 @@ program
     }
 
     if (opts.pipeline) {
-      const { getPipeline } = await import("./db.js");
+      const { getPipeline } = await import("./core/db.js");
       const pipeline = getPipeline();
       if (opts.json) { console.log(JSON.stringify(pipeline, null, 2)); return; }
       console.log(`\nAcquisition Pipeline (${pipeline.length} domains):\n`);
@@ -324,14 +324,14 @@ program
     }
 
     if (opts.pipelineAdd) {
-      const { addToPipeline } = await import("./db.js");
+      const { addToPipeline } = await import("./core/db.js");
       addToPipeline(opts.pipelineAdd);
       console.log(`Added ${opts.pipelineAdd} to acquisition pipeline`);
       return;
     }
 
     if (opts.alerts) {
-      const { getUnacknowledgedAlerts } = await import("./db.js");
+      const { getUnacknowledgedAlerts } = await import("./core/db.js");
       const alerts = getUnacknowledgedAlerts();
       if (opts.json) { console.log(JSON.stringify(alerts, null, 2)); return; }
       console.log(`\nAlerts (${alerts.length} unacknowledged):\n`);
@@ -345,14 +345,14 @@ program
     }
 
     if (opts.dismissAlerts) {
-      const { acknowledgeAllAlerts } = await import("./db.js");
+      const { acknowledgeAllAlerts } = await import("./core/db.js");
       acknowledgeAllAlerts();
       console.log("All alerts dismissed");
       return;
     }
 
     if (opts.categories) {
-      const { getCategories } = await import("./db.js");
+      const { getCategories } = await import("./core/db.js");
       const categories = getCategories();
       if (opts.json) { console.log(JSON.stringify(categories, null, 2)); return; }
       console.log(`\nCategories:\n`);
@@ -364,7 +364,7 @@ program
     }
 
     if (opts.exportCsv) {
-      const { exportPortfolioCSV } = await import("./features/portfolio-bulk.js");
+      const { exportPortfolioCSV } = await import("./core/features/portfolio-bulk.js");
       const path = exportPortfolioCSV(opts.exportCsv);
       console.log(`Portfolio exported to ${path}`);
       return;
@@ -373,22 +373,22 @@ program
     if (opts.exportTax) {
       const year = parseInt(opts.exportTax, 10);
       if (isNaN(year)) { console.error("Usage: --export-tax 2025"); process.exit(1); }
-      const { exportTaxCSV } = await import("./features/portfolio-bulk.js");
+      const { exportTaxCSV } = await import("./core/features/portfolio-bulk.js");
       const path = exportTaxCSV(`tax-${year}.csv`, year);
       console.log(`Tax data for ${year} exported to ${path}`);
       return;
     }
 
     if (opts.exportTransactions) {
-      const { exportTransactionsCSV } = await import("./features/portfolio-bulk.js");
+      const { exportTransactionsCSV } = await import("./core/features/portfolio-bulk.js");
       const path = exportTransactionsCSV(opts.exportTransactions);
       console.log(`Transactions exported to ${path}`);
       return;
     }
 
     if (opts.dashboard) {
-      const { getPortfolioDashboard, getTotalPortfolioValue } = await import("./db.js");
-      const { estimateAnnualRenewalCost } = await import("./features/portfolio-monitor.js");
+      const { getPortfolioDashboard, getTotalPortfolioValue } = await import("./core/db.js");
+      const { estimateAnnualRenewalCost } = await import("./core/features/portfolio-monitor.js");
       const dash = getPortfolioDashboard();
       const annualCost = estimateAnnualRenewalCost();
       if (opts.json) { console.log(JSON.stringify(dash, null, 2)); return; }
@@ -405,7 +405,7 @@ program
     }
 
     if (opts.stats) {
-      const { getPortfolioStatsDb, closeDb } = await import("./db.js");
+      const { getPortfolioStatsDb, closeDb } = await import("./core/db.js");
       const stats = getPortfolioStatsDb();
       if (opts.json) { console.log(JSON.stringify(stats, null, 2)); closeDb(); return; }
       console.log(`\nPortfolio Stats:`);
@@ -425,7 +425,7 @@ program
     }
 
     // Default: list all portfolio domains
-    const { getPortfolioDomains, closeDb } = await import("./db.js");
+    const { getPortfolioDomains, closeDb } = await import("./core/db.js");
     const domains = getPortfolioDomains();
     if (opts.json) { console.log(JSON.stringify(domains, null, 2)); closeDb(); return; }
     console.log(`\nDomain Portfolio (${domains.length} domains):\n`);
@@ -447,7 +447,7 @@ program
   .option("--reset", "Reset to defaults")
   .option("--set <key=value>", "Set a config value (e.g., concurrency=10)")
   .action(async (opts: { path?: boolean; show?: boolean; reset?: boolean; set?: string }) => {
-    const { loadConfig, saveConfig, getConfigPath, resetConfig } = await import("./features/config.js");
+    const { loadConfig, saveConfig, getConfigPath, resetConfig } = await import("./core/features/config.js");
 
     if (opts.path) { console.log(getConfigPath()); return; }
     if (opts.reset) { resetConfig(); console.log("Config reset to defaults"); return; }
@@ -495,7 +495,7 @@ program
   .option("--api-key <key>", "WhoisFreaks API key")
   .option("--json", "Output as JSON")
   .action(async (opts: { tld?: string; minAge?: string; limit: string; apiKey?: string; json?: boolean }) => {
-    const { getExpiringFeed } = await import("./features/expiring-feed.js");
+    const { getExpiringFeed } = await import("./core/features/expiring-feed.js");
     const results = await getExpiringFeed({
       apiKey: opts.apiKey || process.env.WHOISFREAKS_API_KEY,
       tld: opts.tld,
@@ -519,8 +519,8 @@ program
   .option("--interval <seconds>", "Poll interval in seconds", "30")
   .option("--max-hours <hours>", "Maximum hours to monitor", "24")
   .action(async (domain: string, opts: { interval: string; maxHours: string }) => {
-    const { createDropCatcher, formatDropCatchStatus } = await import("./features/drop-catch.js");
-    const { loadConfigFromEnv } = await import("./registrar.js");
+    const { createDropCatcher, formatDropCatchStatus } = await import("./core/features/drop-catch.js");
+    const { loadConfigFromEnv } = await import("./core/registrar.js");
     const config = loadConfigFromEnv();
     if (!config?.apiKey) { console.error("Registrar credentials required. Set REGISTRAR_PROVIDER and REGISTRAR_API_KEY."); process.exit(1); }
     const intervalMs = parseInt(opts.interval, 10) * 1000;
@@ -544,7 +544,7 @@ program
   .option("--json", "Output as JSON")
   .action(async (domain: string, opts: { json?: boolean }) => {
     await checkDependencies();
-    const { whoisLookup, verifyAvailability } = await import("./whois.js");
+    const { whoisLookup, verifyAvailability } = await import("./core/whois.js");
 
     if (!opts.json) {
       console.log(`\n\x1b[1m=== RECON: ${domain} ===\x1b[0m\n`);
@@ -789,7 +789,7 @@ program
 
     // Clean up database connection
     try {
-      const { closeDb: closeReconDb } = await import("./db.js");
+      const { closeDb: closeReconDb } = await import("./core/db.js");
       closeReconDb();
     } catch {}
   });
@@ -805,8 +805,8 @@ program
   .option("--history <domain>", "Show scan history for a domain")
   .option("--json", "Output as JSON")
   .action(async (opts: { stats?: boolean; clearCache?: boolean; importLegacy?: boolean; history?: string; json?: boolean }) => {
-    const { getDbStats, clearCache, importLegacyPortfolio, importLegacySessions, getScanHistory, closeDb } = await import("./db.js");
-    const { PORTFOLIO_FILE, SESSION_DIR } = await import("./paths.js");
+    const { getDbStats, clearCache, importLegacyPortfolio, importLegacySessions, getScanHistory, closeDb } = await import("./core/db.js");
+    const { PORTFOLIO_FILE, SESSION_DIR } = await import("./core/paths.js");
 
     if (opts.clearCache) {
       const count = clearCache();
@@ -924,8 +924,8 @@ async function checkDependencies(): Promise<void> {
 async function runHeadless(domains: string[], options: CliOptions) {
   await checkDependencies();
 
-  const { whoisLookup, verifyAvailability, parseDomainList } = await import("./whois.js");
-  const { loadConfigFromEnv, checkAvailabilityViaRegistrar, registerDomain } = await import("./registrar.js");
+  const { whoisLookup, verifyAvailability, parseDomainList } = await import("./core/whois.js");
+  const { loadConfigFromEnv, checkAvailabilityViaRegistrar, registerDomain } = await import("./core/registrar.js");
   const { readFileSync, existsSync } = await import("fs");
 
   let domainList = [...domains];
@@ -1266,7 +1266,7 @@ async function runHeadless(domains: string[], options: CliOptions) {
 
   // Clean up database connection
   try {
-    const { closeDb } = await import("./db.js");
+    const { closeDb } = await import("./core/db.js");
     closeDb();
   } catch {}
 }

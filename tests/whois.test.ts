@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseDomainList } from "../src/whois.js";
+import { parseDomainList } from "../src/core/whois.js";
 
 describe("parseDomainList", () => {
   test("parses valid domains", () => {

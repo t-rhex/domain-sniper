@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { calculateDomainAge, daysUntilExpiry } from "../src/features/domain-age.js";
+import { calculateDomainAge, daysUntilExpiry } from "../src/core/features/domain-age.js";
 
 describe("calculateDomainAge", () => {
   test("returns null for null input", () => {

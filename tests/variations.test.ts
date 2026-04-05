@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { generateVariations } from "../src/features/variations.js";
+import { generateVariations } from "../src/core/features/variations.js";
 
 describe("generateVariations", () => {
   test("generates variations", () => {

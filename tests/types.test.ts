@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { createEmptyEntry } from "../src/types.js";
+import { createEmptyEntry } from "../src/core/types.js";
 
 describe("createEmptyEntry", () => {
   test("creates entry with correct domain", () => {
