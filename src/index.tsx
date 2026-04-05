@@ -160,6 +160,7 @@ program
   .option("--export-csv <path>", "Export portfolio to CSV")
   .option("--export-tax <year>", "Export tax data for year")
   .option("--export-transactions <path>", "Export transactions to CSV")
+  .option("--upload-s3", "Upload latest export to S3/R2")
   .option("--dashboard", "Show portfolio dashboard summary")
   .option("--stats", "Show portfolio statistics")
   .option("--json", "Output as JSON")
@@ -169,7 +170,7 @@ program
     pnl?: string | boolean; monthly?: string | boolean; pipeline?: boolean; pipelineAdd?: string;
     alerts?: boolean; dismissAlerts?: boolean; categories?: boolean;
     exportCsv?: string; exportTax?: string; exportTransactions?: string;
-    dashboard?: boolean; stats?: boolean; json?: boolean;
+    uploadS3?: boolean; dashboard?: boolean; stats?: boolean; json?: boolean;
   }) => {
     if (opts.add) {
       const { addToPortfolio } = await import("./core/features/portfolio.js");
@@ -383,6 +384,20 @@ program
       const { exportTransactionsCSV } = await import("./core/features/portfolio-bulk.js");
       const path = exportTransactionsCSV(opts.exportTransactions);
       console.log(`Transactions exported to ${path}`);
+      return;
+    }
+
+    if (opts.uploadS3) {
+      const { isS3Configured, uploadPortfolioExport } = await import("./core/features/s3-export.js");
+      if (!isS3Configured()) {
+        console.error("S3 not configured. Set S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY in .env");
+        process.exit(1);
+      }
+      const { exportPortfolioCSV } = await import("./core/features/portfolio-bulk.js");
+      const csvPath = exportPortfolioCSV("/tmp/ds-portfolio-export.csv");
+      const csvContent = await Bun.file(csvPath).text();
+      const result = await uploadPortfolioExport(csvContent);
+      console.log(`Uploaded to S3: ${result.key}`);
       return;
     }
 
@@ -1433,6 +1448,22 @@ snipeCmd
     console.log(`  Registered:  ${stats.registered}`);
     console.log(`  Failed:      ${stats.failed}`);
     console.log(`  Total:       ${stats.total}\n`);
+  });
+
+// ─── Check-update subcommand ────────────────────────────
+
+program
+  .command("check-update")
+  .description("Check for newer versions")
+  .action(async () => {
+    const { checkForUpdates, formatUpdateMessage } = await import("./core/features/version-check.js");
+    console.log("Checking for updates...");
+    const result = await checkForUpdates();
+    if (result.updateAvailable && result.latest) {
+      console.log(formatUpdateMessage(result.current, result.latest));
+    } else {
+      console.log(`You're on the latest version (${result.current})`);
+    }
   });
 
 program.parse();
