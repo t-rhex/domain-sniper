@@ -1370,7 +1370,44 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                       </box>
                     )}
 
-                    <text content="" />
+                    {/* Contextual action hint */}
+                    {selected && selected.status !== "checking" && selected.status !== "pending" && (
+                      <box paddingLeft={2} paddingTop={0} flexShrink={0}>
+                        <text content={
+                          selected.status === "available" && registrarConfig?.apiKey
+                            ? "\u2192 Press r to register  |  p to add to portfolio  |  M then l to list for sale"
+                            : selected.status === "available"
+                            ? "\u2192 Press p to add to portfolio  |  M then l to list for sale"
+                            : selected.status === "expired"
+                            ? "\u2192 Press D for drop catch  |  w to watch for availability"
+                            : selected.status === "taken"
+                            ? "\u2192 Press d for alternatives  |  v for variations  |  Tab for more intel"
+                            : selected.status === "registered"
+                            ? "\u2192 Press p to add to portfolio  |  M then l to list for sale"
+                            : selected.status === "error"
+                            ? "\u2192 Press c to clear cache and rescan"
+                            : ""
+                        } fg={theme.textDisabled} />
+                      </box>
+                    )}
+
+                    {/* One-line summary */}
+                    {selected && selected.status !== "checking" && selected.status !== "pending" && (
+                      <box paddingLeft={1} paddingTop={1} paddingBottom={1} flexShrink={0} flexDirection="row" gap={1} flexWrap="wrap">
+                        {selected.status === "available" && <text content="AVAILABLE" fg={theme.primary} />}
+                        {selected.status === "taken" && <text content="TAKEN" fg={theme.error} />}
+                        {selected.status === "expired" && <text content="EXPIRED" fg={theme.warning} />}
+                        {selected.httpProbe?.parked && <text content="| Parked" fg={theme.warning} />}
+                        {selected.httpProbe?.reachable && !selected.httpProbe?.parked && <text content="| Live" fg={theme.primary} />}
+                        {selected.ssl && !selected.ssl.error && selected.ssl.valid && <text content="| SSL OK" fg={theme.primary} />}
+                        {selected.ssl && !selected.ssl.error && !selected.ssl.valid && <text content="| SSL Bad" fg={theme.error} />}
+                        {selected.blacklist?.listed && <text content="| BLACKLISTED" fg={theme.error} />}
+                        {selected.blacklist && !selected.blacklist.listed && <text content="| Clean" fg={theme.textDisabled} />}
+                        {selected.waf?.detected && <text content={`| WAF: ${selected.waf.waf}`} fg={theme.textDisabled} />}
+                        {selected.techStack?.cms && <text content={`| ${selected.techStack.cms}`} fg={theme.textDisabled} />}
+                        {selected.domainAge && <text content={`| ${selected.domainAge} old`} fg={theme.textDisabled} />}
+                      </box>
+                    )}
 
                     {/* WHOIS */}
                     {selected.whois && !selected.whois.available && (
@@ -1813,6 +1850,30 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                       <text content="Domain Intelligence & Security Recon" fg={theme.textDisabled} />
                     </box>
                     <text content="" />
+
+                    {/* First-run guide */}
+                    {!hasData && (
+                      <box flexDirection="column" paddingLeft={1}>
+                        <text content="GETTING STARTED" fg={theme.primary} />
+                        <text content="" />
+                        <text content="  1. Press / and enter a domain to scan it" fg={theme.textSecondary} />
+                        <text content="     Try: example.com, google.com, or any domain" fg={theme.textDisabled} />
+                        <text content="" />
+                        <text content="  2. Press e to check a name across all TLDs" fg={theme.textSecondary} />
+                        <text content="     Try: coolstartup (checks .com, .io, .dev, etc.)" fg={theme.textDisabled} />
+                        <text content="" />
+                        <text content="  3. Press n to enable security recon mode" fg={theme.textSecondary} />
+                        <text content="     Adds port scanning, security headers, email audit" fg={theme.textDisabled} />
+                        <text content="" />
+                        <text content="  4. Configure registrar for auto-registration:" fg={theme.textSecondary} />
+                        <text content="     cp .env.example .env && edit .env" fg={theme.textDisabled} />
+                        <text content="" />
+                        <text content="  5. Start the marketplace:" fg={theme.textSecondary} />
+                        <text content="     domain-sniper serve" fg={theme.textDisabled} />
+                        <text content="     domain-sniper market signup" fg={theme.textDisabled} />
+                        <text content="" />
+                      </box>
+                    )}
 
                     {/* Stats row — only if there's data */}
                     {hasData && (
