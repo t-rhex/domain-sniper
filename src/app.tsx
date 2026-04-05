@@ -51,7 +51,7 @@ import { auditSecurityHeaders } from "./core/features/security-headers.js";
 import { detectWaf } from "./core/features/waf-detect.js";
 import { scanPaths } from "./core/features/path-scanner.js";
 import { checkCors } from "./core/features/cors-check.js";
-import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getDomainByName, createSession as dbCreateSession, updateSessionCount } from "./core/db.js";
+import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getDomainByName, createSession as dbCreateSession, updateSessionCount, getDbStats, getAllDomains, getPortfolioExpiring } from "./core/db.js";
 import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, type PortfolioStatus, type TransactionType } from "./core/db.js";
 import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./core/features/portfolio-monitor.js";
 
@@ -1796,20 +1796,120 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
               </box>
             </scrollbox>
           ) : (
-            <box flexGrow={1} alignItems="center" justifyContent="center" minHeight={0} flexDirection="column">
-              <text content="╭────────────────────────────────╮" fg={theme.borderSubtle} />
-              <text content="│   ◆ DOMAIN SNIPER v2.0        │" fg={theme.primary} />
-              <text content="│                                │" fg={theme.borderSubtle} />
-              <text content="│  /  scan domains               │" fg={theme.textMuted} />
-              <text content="│  f  load from file             │" fg={theme.textMuted} />
-              <text content="│  e  TLD expansion              │" fg={theme.textMuted} />
-              <text content="│  n  toggle recon mode          │" fg={theme.textMuted} />
-              <text content="│  ?  all commands               │" fg={theme.textMuted} />
-              <text content="│                                │" fg={theme.borderSubtle} />
-              <text content="│  CLI: suggest, portfolio,      │" fg={theme.textDisabled} />
-              <text content="│       recon, expiring, config   │" fg={theme.textDisabled} />
-              <text content="╰────────────────────────────────╯" fg={theme.borderSubtle} />
-            </box>
+            <scrollbox flexGrow={1} paddingLeft={2} paddingRight={2} minHeight={0} scrollbarOptions={{ visible: false }}>
+              {(() => {
+                const dbStats = (() => { try { return getDbStats(); } catch { return null; } })();
+                const portfolio = (() => { try { return getPortfolioDashboard(); } catch { return null; } })();
+                const expiring = (() => { try { return getPortfolioExpiring(30); } catch { return []; } })();
+                const recentDomains = (() => { try { return getAllDomains(5, 0); } catch { return []; } })();
+                const alerts = (() => { try { return getUnacknowledgedAlerts(); } catch { return []; } })();
+                const hasData = dbStats && dbStats.totalScans > 0;
+
+                return (
+                  <box flexDirection="column" gap={0} paddingTop={1}>
+                    {/* Title */}
+                    <box flexDirection="row" gap={2} paddingLeft={1}>
+                      <text content="◆ DOMAIN SNIPER v2.0" fg={theme.primary} />
+                      <text content="Domain Intelligence & Security Recon" fg={theme.textDisabled} />
+                    </box>
+                    <text content="" />
+
+                    {/* Stats row — only if there's data */}
+                    {hasData && (
+                      <box flexDirection="row" gap={3} paddingLeft={1}>
+                        <box flexDirection="column">
+                          <text content="DATABASE" fg={theme.secondary} />
+                          <text content={`  ${dbStats.totalDomains} domains tracked`} fg={theme.textSecondary} />
+                          <text content={`  ${dbStats.totalScans} total scans`} fg={theme.textSecondary} />
+                          <text content={`  ${dbStats.totalSessions} sessions`} fg={theme.textSecondary} />
+                          <text content={`  ${dbStats.cacheEntries} cached`} fg={theme.textDisabled} />
+                        </box>
+                        {portfolio && portfolio.totalDomains > 0 && (
+                          <box flexDirection="column">
+                            <text content="PORTFOLIO" fg={theme.secondary} />
+                            <text content={`  ${portfolio.totalDomains} domains`} fg={theme.textSecondary} />
+                            <text content={`  $${portfolio.totalValue.toFixed(0)} est. value`} fg={theme.primary} />
+                            <text content={`  $${portfolio.totalProfit.toFixed(0)} profit`} fg={portfolio.totalProfit >= 0 ? theme.primary : theme.error} />
+                            {portfolio.expiringIn30 > 0 && <text content={`  ${portfolio.expiringIn30} expiring soon`} fg={theme.warning} />}
+                          </box>
+                        )}
+                        {isLoggedIn() && (
+                          <box flexDirection="column">
+                            <text content="MARKETPLACE" fg={theme.secondary} />
+                            <text content={`  ${getAuthInfo()?.name || "user"}`} fg={theme.primary} />
+                            <text content={`  ${getServerUrl()}`} fg={theme.textDisabled} />
+                            {marketUnread > 0 && <text content={`  ${marketUnread} unread messages`} fg={theme.warning} />}
+                          </box>
+                        )}
+                      </box>
+                    )}
+                    {hasData && <text content="" />}
+
+                    {/* Alerts */}
+                    {alerts.length > 0 && (
+                      <box flexDirection="column" paddingLeft={1}>
+                        <text content={`ALERTS (${alerts.length})`} fg={theme.warning} />
+                        {alerts.slice(0, 3).map((a: any) => (
+                          <text key={a.id} content={`  ${a.severity === "critical" ? "!!" : "! "} ${a.domain}: ${a.message}`} fg={a.severity === "critical" ? theme.error : theme.warning} />
+                        ))}
+                        {alerts.length > 3 && <text content={`  +${alerts.length - 3} more (press P for details)`} fg={theme.textDisabled} />}
+                        <text content="" />
+                      </box>
+                    )}
+
+                    {/* Expiring domains */}
+                    {expiring.length > 0 && (
+                      <box flexDirection="column" paddingLeft={1}>
+                        <text content="EXPIRING SOON (30 days)" fg={theme.error} />
+                        {expiring.slice(0, 3).map((d: any) => (
+                          <text key={d.domain} content={`  ${d.domain}  ${d.expiry_date || ""}`} fg={theme.warning} />
+                        ))}
+                        <text content="" />
+                      </box>
+                    )}
+
+                    {/* Recent domains */}
+                    {recentDomains.length > 0 && (
+                      <box flexDirection="column" paddingLeft={1}>
+                        <text content="RECENTLY SCANNED" fg={theme.textMuted} />
+                        {recentDomains.map((d: any) => (
+                          <text key={d.domain} content={`  ${d.domain}  (${d.scan_count}x)`} fg={theme.textDisabled} />
+                        ))}
+                        <text content="" />
+                      </box>
+                    )}
+
+                    {/* Quick start */}
+                    <box flexDirection="column" paddingLeft={1}>
+                      <text content="QUICK START" fg={theme.primary} />
+                      <text content="  /    Scan domains          e    TLD expansion" fg={theme.textSecondary} />
+                      <text content="  f    Load from file        n    Toggle recon mode" fg={theme.textSecondary} />
+                      <text content="  M    Marketplace           P    Portfolio dashboard" fg={theme.textSecondary} />
+                      <text content="  ?    All commands          q    Quit" fg={theme.textSecondary} />
+                    </box>
+                    <text content="" />
+
+                    {/* Modes */}
+                    <box flexDirection="column" paddingLeft={1}>
+                      <text content="MODES" fg={theme.textMuted} />
+                      <box flexDirection="row" gap={2}>
+                        <text content={`  Recon: ${reconMode ? "ON" : "OFF"}`} fg={reconMode ? theme.warning : theme.textDisabled} />
+                        <text content={`  Registrar: ${registrarConfig?.apiKey ? registrarConfig.provider : "none"}`} fg={registrarConfig?.apiKey ? theme.secondary : theme.textDisabled} />
+                        <text content={`  Market: ${isLoggedIn() ? "signed in" : "not signed in"}`} fg={isLoggedIn() ? theme.primary : theme.textDisabled} />
+                      </box>
+                    </box>
+                    <text content="" />
+
+                    {/* CLI hint */}
+                    <box flexDirection="column" paddingLeft={1}>
+                      <text content="CLI COMMANDS" fg={theme.textDisabled} />
+                      <text content="  suggest <keyword>     recon <domain>       market browse" fg={theme.textDisabled} />
+                      <text content="  portfolio --dashboard  db --stats          serve --port 3000" fg={theme.textDisabled} />
+                    </box>
+                  </box>
+                );
+              })()}
+            </scrollbox>
           )}
         </box>
         </>
