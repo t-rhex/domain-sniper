@@ -620,6 +620,324 @@ export function getPortfolioStatsDb(): PortfolioStats {
   return { total, totalSpent, expiringIn30, expiringIn90, byRegistrar };
 }
 
+// ─── Portfolio Status & Category ─────────────────────────
+
+export type PortfolioStatus = "active" | "parked" | "for-sale" | "development" | "archived";
+export type PipelineStatus = "watching" | "bidding" | "negotiating" | "won" | "lost" | "cancelled";
+export type TransactionType = "purchase" | "renewal" | "sale" | "parking-revenue" | "affiliate-revenue" | "expense" | "refund";
+export type AlertSeverity = "critical" | "warning" | "info";
+
+export function updatePortfolioStatus(domain: string, status: PortfolioStatus): void {
+  const db = getDb();
+  db.run("UPDATE portfolio SET status = ?, updated_at = datetime('now') WHERE domain = ?", [status, domain]);
+}
+
+export function updatePortfolioCategory(domain: string, category: string): void {
+  const db = getDb();
+  db.run("UPDATE portfolio SET category = ?, updated_at = datetime('now') WHERE domain = ?", [category, domain]);
+}
+
+export function updatePortfolioValue(domain: string, value: number): void {
+  const db = getDb();
+  db.run("UPDATE portfolio SET estimated_value = ?, updated_at = datetime('now') WHERE domain = ?", [value, domain]);
+  // Also save valuation history
+  db.run("INSERT INTO portfolio_valuations (domain, estimated_value, source) VALUES (?, ?, 'manual')", [domain, value]);
+}
+
+export function getPortfolioByStatus(status: PortfolioStatus): DbPortfolioDomain[] {
+  const db = getDb();
+  return db.query("SELECT * FROM portfolio WHERE status = ? ORDER BY domain").all(status) as DbPortfolioDomain[];
+}
+
+export function getPortfolioByCategory(category: string): DbPortfolioDomain[] {
+  const db = getDb();
+  return db.query("SELECT * FROM portfolio WHERE category = ? ORDER BY domain").all(category) as DbPortfolioDomain[];
+}
+
+// ─── Transactions ────────────────────────────────────────
+
+export function addTransaction(
+  domain: string,
+  type: TransactionType,
+  amount: number,
+  description: string = "",
+  date?: string,
+  currency: string = "USD"
+): number {
+  const db = getDb();
+  const result = db.run(
+    "INSERT INTO portfolio_transactions (domain, type, amount, currency, description, date) VALUES (?, ?, ?, ?, ?, ?)",
+    [domain, type, amount, currency, description, date || new Date().toISOString().split("T")[0]!]
+  );
+  return Number(result.lastInsertRowid);
+}
+
+export function getTransactions(domain?: string, limit: number = 50): Array<{
+  id: number; domain: string; type: string; amount: number; currency: string; description: string; date: string;
+}> {
+  const db = getDb();
+  if (domain) {
+    return db.query("SELECT * FROM portfolio_transactions WHERE domain = ? ORDER BY date DESC LIMIT ?").all(domain, limit) as any[];
+  }
+  return db.query("SELECT * FROM portfolio_transactions ORDER BY date DESC LIMIT ?").all(limit) as any[];
+}
+
+export function getTransactionsByType(type: TransactionType, limit: number = 100): any[] {
+  const db = getDb();
+  return db.query("SELECT * FROM portfolio_transactions WHERE type = ? ORDER BY date DESC LIMIT ?").all(type, limit) as any[];
+}
+
+export function getDomainPnL(domain: string): { costs: number; revenue: number; profit: number } {
+  const db = getDb();
+  const costs = (db.query(
+    "SELECT COALESCE(SUM(amount), 0) as total FROM portfolio_transactions WHERE domain = ? AND type IN ('purchase','renewal','expense')"
+  ).get(domain) as { total: number }).total;
+
+  const revenue = (db.query(
+    "SELECT COALESCE(SUM(amount), 0) as total FROM portfolio_transactions WHERE domain = ? AND type IN ('sale','parking-revenue','affiliate-revenue','refund')"
+  ).get(domain) as { total: number }).total;
+
+  return { costs, revenue, profit: revenue - costs };
+}
+
+export function getPortfolioPnL(): { totalCosts: number; totalRevenue: number; totalProfit: number; domainCount: number } {
+  const db = getDb();
+  const totalCosts = (db.query(
+    "SELECT COALESCE(SUM(amount), 0) as total FROM portfolio_transactions WHERE type IN ('purchase','renewal','expense')"
+  ).get() as { total: number }).total;
+
+  const totalRevenue = (db.query(
+    "SELECT COALESCE(SUM(amount), 0) as total FROM portfolio_transactions WHERE type IN ('sale','parking-revenue','affiliate-revenue','refund')"
+  ).get() as { total: number }).total;
+
+  const domainCount = (db.query("SELECT COUNT(DISTINCT domain) as c FROM portfolio_transactions").get() as { c: number }).c;
+
+  return { totalCosts, totalRevenue, totalProfit: totalRevenue - totalCosts, domainCount };
+}
+
+export function getMonthlyReport(months: number = 12): Array<{
+  month: string; costs: number; revenue: number; profit: number;
+}> {
+  const db = getDb();
+  const rows = db.query(`
+    SELECT
+      strftime('%Y-%m', date) as month,
+      SUM(CASE WHEN type IN ('purchase','renewal','expense') THEN amount ELSE 0 END) as costs,
+      SUM(CASE WHEN type IN ('sale','parking-revenue','affiliate-revenue','refund') THEN amount ELSE 0 END) as revenue
+    FROM portfolio_transactions
+    WHERE date >= date('now', '-' || ? || ' months')
+    GROUP BY month
+    ORDER BY month DESC
+  `).all(months) as Array<{ month: string; costs: number; revenue: number }>;
+
+  return rows.map((r) => ({ ...r, profit: r.revenue - r.costs }));
+}
+
+// ─── Valuations ──────────────────────────────────────────
+
+export function saveValuation(domain: string, value: number, source: string = "manual"): void {
+  const db = getDb();
+  db.run("INSERT INTO portfolio_valuations (domain, estimated_value, source) VALUES (?, ?, ?)", [domain, value, source]);
+  db.run("UPDATE portfolio SET estimated_value = ?, updated_at = datetime('now') WHERE domain = ?", [value, domain]);
+}
+
+export function getValuationHistory(domain: string, limit: number = 20): Array<{
+  id: number; estimated_value: number; source: string; valued_at: string;
+}> {
+  const db = getDb();
+  return db.query("SELECT * FROM portfolio_valuations WHERE domain = ? ORDER BY valued_at DESC LIMIT ?").all(domain, limit) as any[];
+}
+
+export function getTotalPortfolioValue(): number {
+  const db = getDb();
+  return (db.query("SELECT COALESCE(SUM(estimated_value), 0) as total FROM portfolio").get() as { total: number }).total;
+}
+
+// ─── Pipeline ────────────────────────────────────────────
+
+export function addToPipeline(domain: string, details: {
+  maxBid?: number; currentPrice?: number; source?: string; notes?: string; priority?: string;
+} = {}): void {
+  const db = getDb();
+  db.run(`
+    INSERT INTO acquisition_pipeline (domain, max_bid, current_price, source, notes, priority)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(domain) DO UPDATE SET
+      max_bid = excluded.max_bid,
+      current_price = excluded.current_price,
+      source = excluded.source,
+      notes = excluded.notes,
+      priority = excluded.priority,
+      updated_at = datetime('now')
+  `, [domain, details.maxBid ?? null, details.currentPrice ?? null, details.source || "", details.notes || "", details.priority || "medium"]);
+}
+
+export function updatePipelineStatus(domain: string, status: PipelineStatus): void {
+  const db = getDb();
+  db.run("UPDATE acquisition_pipeline SET status = ?, updated_at = datetime('now') WHERE domain = ?", [status, domain]);
+}
+
+export function getPipeline(status?: PipelineStatus): any[] {
+  const db = getDb();
+  if (status) {
+    return db.query("SELECT * FROM acquisition_pipeline WHERE status = ? ORDER BY priority, added_at DESC").all(status) as any[];
+  }
+  return db.query("SELECT * FROM acquisition_pipeline ORDER BY status, priority, added_at DESC").all() as any[];
+}
+
+export function removeFromPipeline(domain: string): void {
+  const db = getDb();
+  db.run("DELETE FROM acquisition_pipeline WHERE domain = ?", [domain]);
+}
+
+// ─── Categories ──────────────────────────────────────────
+
+export function getCategories(): Array<{ id: number; name: string; color: string; description: string; count: number }> {
+  const db = getDb();
+  return db.query(`
+    SELECT c.*, COALESCE(p.cnt, 0) as count
+    FROM portfolio_categories c
+    LEFT JOIN (SELECT category, COUNT(*) as cnt FROM portfolio GROUP BY category) p ON c.name = p.category
+    ORDER BY c.name
+  `).all() as any[];
+}
+
+export function addCategory(name: string, color: string = "#5c9cf5", description: string = ""): void {
+  const db = getDb();
+  db.run("INSERT OR IGNORE INTO portfolio_categories (name, color, description) VALUES (?, ?, ?)", [name, color, description]);
+}
+
+// ─── Alerts ──────────────────────────────────────────────
+
+export function createAlert(domain: string, type: string, severity: AlertSeverity, message: string): number {
+  const db = getDb();
+  const result = db.run(
+    "INSERT INTO portfolio_alerts (domain, type, severity, message) VALUES (?, ?, ?, ?)",
+    [domain, type, severity, message]
+  );
+  return Number(result.lastInsertRowid);
+}
+
+export function getUnacknowledgedAlerts(): Array<{
+  id: number; domain: string; type: string; severity: string; message: string; created_at: string;
+}> {
+  const db = getDb();
+  return db.query("SELECT * FROM portfolio_alerts WHERE acknowledged = 0 ORDER BY severity DESC, created_at DESC").all() as any[];
+}
+
+export function acknowledgeAlert(alertId: number): void {
+  const db = getDb();
+  db.run("UPDATE portfolio_alerts SET acknowledged = 1 WHERE id = ?", [alertId]);
+}
+
+export function acknowledgeAllAlerts(): void {
+  const db = getDb();
+  db.run("UPDATE portfolio_alerts SET acknowledged = 1 WHERE acknowledged = 0");
+}
+
+// ─── Portfolio Dashboard Stats ───────────────────────────
+
+export function getPortfolioDashboard(): {
+  totalDomains: number;
+  totalValue: number;
+  totalCosts: number;
+  totalRevenue: number;
+  totalProfit: number;
+  expiringIn30: number;
+  expiringIn90: number;
+  activeAlerts: number;
+  pipelineCount: number;
+  byStatus: Record<string, number>;
+  byCategory: Record<string, number>;
+  topValueDomains: Array<{ domain: string; estimated_value: number }>;
+  recentTransactions: Array<{ domain: string; type: string; amount: number; date: string }>;
+} {
+  const db = getDb();
+  const totalDomains = (db.query("SELECT COUNT(*) as c FROM portfolio").get() as { c: number }).c;
+  const totalValue = getTotalPortfolioValue();
+  const pnl = getPortfolioPnL();
+  const exp30 = getPortfolioExpiring(30).length;
+  const exp90 = getPortfolioExpiring(90).length;
+  const activeAlerts = (db.query("SELECT COUNT(*) as c FROM portfolio_alerts WHERE acknowledged = 0").get() as { c: number }).c;
+  const pipelineCount = (db.query("SELECT COUNT(*) as c FROM acquisition_pipeline WHERE status IN ('watching','bidding','negotiating')").get() as { c: number }).c;
+
+  const statusRows = db.query("SELECT status, COUNT(*) as c FROM portfolio GROUP BY status").all() as Array<{ status: string; c: number }>;
+  const byStatus: Record<string, number> = {};
+  for (const r of statusRows) byStatus[r.status] = r.c;
+
+  const catRows = db.query("SELECT category, COUNT(*) as c FROM portfolio GROUP BY category").all() as Array<{ category: string; c: number }>;
+  const byCategory: Record<string, number> = {};
+  for (const r of catRows) byCategory[r.category] = r.c;
+
+  const topValueDomains = db.query("SELECT domain, estimated_value FROM portfolio WHERE estimated_value > 0 ORDER BY estimated_value DESC LIMIT 5").all() as Array<{ domain: string; estimated_value: number }>;
+  const recentTransactions = db.query("SELECT domain, type, amount, date FROM portfolio_transactions ORDER BY date DESC LIMIT 5").all() as Array<{ domain: string; type: string; amount: number; date: string }>;
+
+  return {
+    totalDomains, totalValue,
+    totalCosts: pnl.totalCosts, totalRevenue: pnl.totalRevenue, totalProfit: pnl.totalProfit,
+    expiringIn30: exp30, expiringIn90: exp90,
+    activeAlerts, pipelineCount,
+    byStatus, byCategory,
+    topValueDomains, recentTransactions,
+  };
+}
+
+// ─── Tax Export ───────────────────────────────────────────
+
+export function getTaxExportData(year: number): Array<{
+  domain: string;
+  purchaseDate: string;
+  purchasePrice: number;
+  saleDate: string | null;
+  salePrice: number | null;
+  holdingDays: number | null;
+  profit: number;
+  currency: string;
+}> {
+  const db = getDb();
+  const yearStr = String(year);
+
+  // Get all domains with transactions in the given year
+  const domains = db.query(`
+    SELECT DISTINCT domain FROM portfolio_transactions
+    WHERE strftime('%Y', date) = ?
+  `).all(yearStr) as Array<{ domain: string }>;
+
+  return domains.map((d) => {
+    const purchases = db.query(
+      "SELECT amount, date FROM portfolio_transactions WHERE domain = ? AND type = 'purchase' ORDER BY date ASC LIMIT 1"
+    ).get(d.domain) as { amount: number; date: string } | null;
+
+    const sales = db.query(
+      "SELECT amount, date FROM portfolio_transactions WHERE domain = ? AND type = 'sale' AND strftime('%Y', date) = ? ORDER BY date DESC LIMIT 1"
+    ).get(d.domain, yearStr) as { amount: number; date: string } | null;
+
+    const totalCosts = (db.query(
+      "SELECT COALESCE(SUM(amount), 0) as total FROM portfolio_transactions WHERE domain = ? AND type IN ('purchase', 'renewal', 'expense')"
+    ).get(d.domain) as { total: number }).total;
+
+    const totalRevenue = (db.query(
+      "SELECT COALESCE(SUM(amount), 0) as total FROM portfolio_transactions WHERE domain = ? AND type IN ('sale', 'parking-revenue', 'affiliate-revenue') AND strftime('%Y', date) = ?"
+    ).get(d.domain, yearStr) as { total: number }).total;
+
+    let holdingDays: number | null = null;
+    if (purchases && sales) {
+      holdingDays = Math.floor((new Date(sales.date).getTime() - new Date(purchases.date).getTime()) / 86400000);
+    }
+
+    return {
+      domain: d.domain,
+      purchaseDate: purchases?.date || "",
+      purchasePrice: purchases?.amount || 0,
+      saleDate: sales?.date || null,
+      salePrice: sales?.amount || null,
+      holdingDays,
+      profit: totalRevenue - totalCosts,
+      currency: "USD",
+    };
+  });
+}
+
 // ─── WHOIS History ───────────────────────────────────────
 
 export interface WhoisSnapshotInput {
