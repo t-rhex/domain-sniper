@@ -46,6 +46,7 @@ import { auditSecurityHeaders } from "./features/security-headers.js";
 import { detectWaf } from "./features/waf-detect.js";
 import { scanPaths } from "./features/path-scanner.js";
 import { checkCors } from "./features/cors-check.js";
+import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getDomainByName, createSession as dbCreateSession, updateSessionCount } from "./db.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -101,6 +102,18 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   // ─── Domain Processing ──────────────────────────────────
 
   const processDomain = useCallback(async (domain: string): Promise<DomainEntry> => {
+    // Check cache first (5-minute TTL for regular, skip for recon)
+    if (!reconMode) {
+      const cached = getCached(domain, "scan");
+      if (cached) {
+        try {
+          const entry = JSON.parse(cached) as DomainEntry;
+          log(`↻ CACHED ${domain}`, theme.textDisabled);
+          return entry;
+        } catch {}
+      }
+    }
+
     const entry: DomainEntry = {
       ...createEmptyEntry(domain),
       status: "checking",
@@ -199,6 +212,14 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
 
+      // Save to cache (5 min TTL) and database
+      setCache(domain, "scan", JSON.stringify(entry), 5);
+      try {
+        const domainId = upsertDomain(domain);
+        const score = scoreDomain(domain);
+        saveScan(domainId, entry.status, entry, undefined, score.total);
+      } catch {}
+
       return entry;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -212,6 +233,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (processingRef.current) return;
     processingRef.current = true;
     setMode("scanning");
+
+    let sessionId: number | undefined;
+    try { sessionId = dbCreateSession(); } catch {}
 
     const entries: DomainEntry[] = domainList.map((d) => createEmptyEntry(d));
 
@@ -270,6 +294,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       () => worker()
     );
     await Promise.all(workers);
+
+    try { if (sessionId) updateSessionCount(sessionId, domainList.length); } catch {}
 
     processingRef.current = false;
     setMode("done");
@@ -456,6 +482,25 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           log(`Added ${selected.domain} to portfolio`, theme.info);
         } catch (err: unknown) {
           log(`Portfolio: ${err instanceof Error ? err.message : "failed"}`, theme.error);
+        }
+      }
+
+      // Clear cache for selected domain
+      else if (key === "c" && selected) {
+        const count = clearCache(selected.domain);
+        log(`Cleared cache for ${selected.domain} (${count} entries)`, theme.info);
+      }
+
+      // Show scan history for selected domain
+      else if (key === "h" && selected) {
+        const history = getScanHistory(selected.domain, 5);
+        if (history.length > 0) {
+          log(`─── History for ${selected.domain} ───`, theme.secondary);
+          for (const h of history) {
+            log(`  ${h.scanned_at} — ${h.status}${h.score ? ` (${h.score})` : ""}`, theme.textSecondary);
+          }
+        } else {
+          log(`No scan history for ${selected.domain}`, theme.textMuted);
         }
       }
 
@@ -708,6 +753,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  d             Suggest similar domains" fg={theme.textSecondary} />
                 <text content="  p             Add to portfolio" fg={theme.textSecondary} />
                 <text content="  D             Drop catch (expired only)" fg={theme.textSecondary} />
+                <text content="  c             Clear cache for selected" fg={theme.textSecondary} />
+                <text content="  h             Show scan history" fg={theme.textSecondary} />
                 <text content="  w             Watch tagged (1h)" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Filter & Sort" fg={theme.secondary} />
@@ -747,6 +794,12 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   {selected.domainAge && (
                     <text content={`age: ${selected.domainAge}`} fg={theme.textMuted} />
                   )}
+                  {(() => {
+                    try {
+                      const dbDomain = getDomainByName(selected.domain);
+                      return dbDomain && dbDomain.scan_count > 1 ? <text content={`scanned ${dbDomain.scan_count}x`} fg={theme.textDisabled} /> : null;
+                    } catch { return null; }
+                  })()}
                 </box>
 
                 {/* Score breakdown */}
@@ -1199,6 +1252,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 {registrarConfig?.apiKey && (<><box backgroundColor={theme.textDisabled}><text content=" r " fg={theme.background} /></box><text content="reg" fg={theme.textMuted} /></>)}
                 <box backgroundColor={theme.textDisabled}><text content=" d " fg={theme.background} /></box><text content="suggest" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" p " fg={theme.background} /></box><text content="portfolio" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" c " fg={theme.background} /></box><text content="cache" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" h " fg={theme.background} /></box><text content="history" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" n " fg={theme.background} /></box><text content={reconMode ? "recon:ON" : "recon"} fg={reconMode ? theme.error : theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" ? " fg={theme.background} /></box><text content="help" fg={theme.textMuted} />
               </>
