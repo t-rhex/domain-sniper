@@ -9,6 +9,12 @@ const AUTH_DB_FILE = join(APP_DIR, "auth.db");
 
 if (!existsSync(APP_DIR)) mkdirSync(APP_DIR, { recursive: true });
 
+const authSecret = process.env.BETTER_AUTH_SECRET;
+if (!authSecret || authSecret.length < 32) {
+  console.error("FATAL: BETTER_AUTH_SECRET must be set and at least 32 characters");
+  process.exit(1);
+}
+
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
   database: new Database(AUTH_DB_FILE),

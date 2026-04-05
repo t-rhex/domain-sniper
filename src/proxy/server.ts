@@ -58,8 +58,12 @@ export function startProxy(config: ProxyConfig): { stop: () => void } {
       const scheme = url.protocol.replace(":", "");
 
       // Capture request
+      const SENSITIVE_HEADERS = ["authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization"];
       const reqHeaders: Record<string, string> = {};
       req.headers.forEach((v, k) => { reqHeaders[k] = v; });
+      for (const h of SENSITIVE_HEADERS) {
+        if (reqHeaders[h]) reqHeaders[h] = "[REDACTED]";
+      }
       let reqBody = "";
       if (method !== "GET" && method !== "HEAD") {
         try { reqBody = await req.clone().text(); } catch {}
@@ -97,6 +101,11 @@ export function startProxy(config: ProxyConfig): { stop: () => void } {
         } catch {}
 
         const durationMs = Date.now() - startTime;
+
+        // Redact sensitive response headers before saving
+        for (const h of SENSITIVE_HEADERS) {
+          if (respHeaders[h]) respHeaders[h] = "[REDACTED]";
+        }
 
         // Save to database
         const id = saveRequest({

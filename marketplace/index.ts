@@ -27,6 +27,7 @@ import {
   removeFromWatchlist,
   getWatchlist,
   getMarketStats,
+  publicListing,
   type ListingStatus,
   type OfferStatus,
 } from "./db.js";
@@ -65,11 +66,7 @@ if (process.env.ALLOWED_ORIGINS) {
 
 function getAllowedOrigin(req: Request): string {
   const origin = req.headers.get("origin") || "";
-  // In production, only allow listed origins. In dev, allow all.
-  if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT) {
-    return ALLOWED_ORIGINS.has(origin) ? origin : "";
-  }
-  return origin || "*";
+  return ALLOWED_ORIGINS.has(origin) ? origin : "";
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -163,6 +160,7 @@ function rateLimited(resetIn: number): Response {
 
 Bun.serve({
   port: PORT,
+  maxRequestBodySize: MAX_BODY_SIZE,
   async fetch(req) {
     try {
     const url = new URL(req.url);
@@ -252,6 +250,7 @@ Bun.serve({
         limit,
         offset,
       });
+      result.listings = result.listings.map(publicListing);
       const body = JSON.stringify(result);
       await cacheSet(cacheKey, body, 30);
       return new Response(body, {
@@ -273,7 +272,7 @@ Bun.serve({
       if (!listing) return json({ error: "Not found" }, 404, req);
       incrementViews(id);
       const offers = getOffersForListing(id);
-      return json({ listing, offerCount: offers.length }, 200, req);
+      return json({ listing: publicListing(listing), offerCount: offers.length }, 200, req);
     }
 
     // GET /api/stats -- Market stats (with caching)
@@ -320,7 +319,7 @@ Bun.serve({
     // POST /api/listings -- Create listing
     if (method === "POST" && url.pathname === "/api/listings") {
       if (!session) return unauthorized(req);
-      const body = (await req.json()) as {
+      let body: {
         domain: string;
         askingPrice: number;
         title?: string;
@@ -329,6 +328,11 @@ Bun.serve({
         buyNow?: boolean;
         category?: string;
       };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
       if (!body.domain || !body.askingPrice)
         return json({ error: "domain and askingPrice required" }, 400, req);
       if (!isValidDomain(body.domain)) {
@@ -391,7 +395,12 @@ Bun.serve({
       if (listing.user_id !== session.user.id)
         return json({ error: "Not your listing" }, 403, req);
 
-      const body = (await req.json()) as { status?: string };
+      let body: { status?: string };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
       if (body.status) {
         if (!USER_SETTABLE_LISTING_STATUSES.includes(body.status)) {
           return json({ error: `Invalid status. Allowed: ${USER_SETTABLE_LISTING_STATUSES.join(", ")}` }, 400, req);
@@ -435,11 +444,16 @@ Bun.serve({
     // POST /api/offers -- Make an offer
     if (method === "POST" && url.pathname === "/api/offers") {
       if (!session) return unauthorized(req);
-      const body = (await req.json()) as {
+      let body: {
         listingId: number;
         amount: number;
         message?: string;
       };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
       if (!body.listingId || !body.amount)
         return json({ error: "listingId and amount required" }, 400, req);
       if (!isValidPrice(body.amount)) {
@@ -478,10 +492,15 @@ Bun.serve({
       const offer = getOffer(id);
       if (!offer) return json({ error: "Not found" }, 404, req);
 
-      const body = (await req.json()) as {
+      let body: {
         status: string;
         counterAmount?: number;
       };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
 
       // Determine allowed statuses based on role
       const allowedStatuses = offer.seller_id === session.user.id
@@ -547,7 +566,12 @@ Bun.serve({
       )
         return json({ error: "Forbidden" }, 403, req);
 
-      const body = (await req.json()) as { content: string };
+      let body: { content: string };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
       const safeContent = sanitize(body.content);
       const recipientId =
         session.user.id === offer.buyer_id
@@ -571,11 +595,16 @@ Bun.serve({
     // PUT /api/my/profile -- Update profile
     if (method === "PUT" && url.pathname === "/api/my/profile") {
       if (!session) return unauthorized(req);
-      const body = (await req.json()) as {
+      let body: {
         displayName?: string;
         bio?: string;
         website?: string;
       };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
       const safeDisplayName = body.displayName ? sanitize(body.displayName) : undefined;
       const safeBio = body.bio ? sanitize(body.bio) : undefined;
       const safeWebsite = body.website !== undefined
@@ -601,7 +630,15 @@ Bun.serve({
     // POST /api/my/watchlist -- Add to watchlist
     if (method === "POST" && url.pathname === "/api/my/watchlist") {
       if (!session) return unauthorized(req);
-      const body = (await req.json()) as { listingId: number };
+      let body: { listingId: number };
+      try {
+        body = await req.json() as typeof body;
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400, req);
+      }
+      const listing = getListing(body.listingId);
+      if (!listing) return json({ error: "Listing not found" }, 404, req);
+      if (listing.status !== "active") return json({ error: "Listing is not active" }, 400, req);
       addToWatchlist(session.user.id, body.listingId);
       return json({ success: true }, 201, req);
     }

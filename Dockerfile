@@ -17,5 +17,10 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -f http://localhost:3000/api/stats || exit 1
 
+# Run as non-root user
+RUN addgroup --system --gid 1001 appuser && adduser --system --uid 1001 appuser
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
+USER appuser
+
 # Run marketplace server
 CMD ["bun", "run", "marketplace/index.ts"]

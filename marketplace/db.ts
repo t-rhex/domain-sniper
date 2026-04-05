@@ -13,7 +13,7 @@ const MARKET_DB_FILE = join(APP_DIR, "marketplace.db");
 // in sync so a full query migration can happen incrementally.
 if (isPostgresEnabled()) {
   initPostgres().catch((err: unknown) => {
-    console.error("Postgres init failed, continuing with SQLite:", err);
+    console.error("Postgres init failed, continuing with SQLite:", err instanceof Error ? err.message : "unknown error");
   });
 }
 
@@ -178,6 +178,14 @@ const MIGRATIONS: Migration[] = [
     ],
   },
 ];
+
+// ─── Public listing helper (strip sensitive fields) ─────
+
+export function publicListing(listing: any): any {
+  if (!listing) return null;
+  const { verification_token, verification_expires, ...safe } = listing;
+  return safe;
+}
 
 // ─── Listing CRUD ────────────────────────────────────────
 
