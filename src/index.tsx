@@ -72,6 +72,7 @@ program
       const renderer = await createCliRenderer({
         exitOnCtrlC: true,
         screenMode: "alternate-screen",
+        useMouse: true,
       });
 
       createRoot(renderer).render(

@@ -90,7 +90,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [showPortfolio, setShowPortfolio] = useState(false);
   const [filter, setFilter] = useState<FilterConfig>({ ...DEFAULT_FILTER });
   const [logs, setLogs] = useState<{ id: number; time: string; msg: string; fg: string }[]>([
-    { id: 0, time: ts(), msg: "Domain Sniper v2.0 initialized", fg: theme.textMuted },
+    { id: 0, time: ts(), msg: "Domain Sniper v0.1.1 initialized", fg: theme.textMuted },
     { id: 1, time: ts(), msg: "Press ? for all commands", fg: theme.textMuted },
   ]);
   const [registrarConfig] = useState<RegistrarConfig | null>(loadConfigFromEnv());
@@ -424,7 +424,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (showPortfolio && key === "escape") { setShowPortfolio(false); return; }
 
     // ── Marketplace toggle ──
-    if (key === "M" && mode !== "input" && !showPortfolio) {
+    if (key === "M" && mode !== "input") {
       if (!showMarket) {
         setShowMarket(true);
         setMarketView("browse");
@@ -569,6 +569,35 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       return;
     }
 
+    // ── Overlay toggles (work in any non-input mode) ──
+
+    // Toggle recon mode (already past input mode guard)
+    if (key === "n" && !ctrl) {
+      setReconMode((v) => {
+        const newVal = !v;
+        log(newVal ? "Recon mode ON (full pentest — rescan to apply)" : "Recon mode OFF (fast scan)", newVal ? theme.warning : theme.textMuted);
+        return newVal;
+      });
+      return;
+    }
+
+    // Snipe selected domain (already past input mode guard)
+    if (key === "S" && selected) {
+      if (selected.status === "taken" || selected.status === "expired") {
+        snipeDomain(selected.domain, {
+          expiryDate: selected.whois?.expiryDate || undefined,
+        });
+        const phase = selected.status === "expired" ? "frequent" : "hourly";
+        log(`Sniping ${selected.domain} — ${selected.status === "expired" ? "expired, checking every 5 min" : "watching for expiry"}`, theme.warning);
+        log(`Run 'domain-sniper snipe run' to start the engine`, theme.textDisabled);
+      } else if (selected.status === "available") {
+        log(`${selected.domain} is already available — press r to register now`, theme.primary);
+      } else {
+        log(`Cannot snipe ${selected.domain} (status: ${selected.status})`, theme.textMuted);
+      }
+      return;
+    }
+
     // ── Navigation ──
     if (mode === "scanning" || mode === "done" || mode === "watching") {
       if (key === "up" || key === "k" || (ctrl && key === "p")) setSelectedIndex((i: number) => Math.max(0, i - 1));
@@ -696,15 +725,6 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
 
-      // Toggle recon mode (Issue 4: fix inverted message)
-      else if (key === "n") {
-        setReconMode((v) => {
-          const newVal = !v;
-          log(newVal ? "Recon mode ON (full pentest — rescan to apply)" : "Recon mode OFF (fast scan)", newVal ? theme.warning : theme.textMuted);
-          return newVal;
-        });
-      }
-
       // Add to portfolio
       else if (key === "p" && selected) {
         try {
@@ -716,22 +736,6 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           log(`Added ${selected.domain} to portfolio`, theme.info);
         } catch (err: unknown) {
           log(`Portfolio: ${err instanceof Error ? err.message : "failed"}`, theme.error);
-        }
-      }
-
-      // Snipe selected domain
-      else if (key === "S" && selected) {
-        if (selected.status === "taken" || selected.status === "expired") {
-          snipeDomain(selected.domain, {
-            expiryDate: selected.whois?.expiryDate || undefined,
-          });
-          const phase = selected.status === "expired" ? "frequent" : "hourly";
-          log(`Sniping ${selected.domain} — ${selected.status === "expired" ? "expired, checking every 5 min" : "watching for expiry"}`, theme.warning);
-          log(`Run 'domain-sniper snipe run' to start the engine`, theme.textDisabled);
-        } else if (selected.status === "available") {
-          log(`${selected.domain} is already available — press r to register now`, theme.primary);
-        } else {
-          log(`Cannot snipe ${selected.domain} (status: ${selected.status})`, theme.textMuted);
         }
       }
 
@@ -1057,7 +1061,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                       const status = item.status || "—";
                       const verified = item.verified ? "✓" : " ";
                       return (
-                        <box key={item.id || i} flexDirection="row" backgroundColor={active ? theme.secondaryDim : "transparent"} paddingLeft={1} gap={1}>
+                        <box key={item.id || i} flexDirection="row" backgroundColor={active ? theme.secondaryDim : "transparent"} paddingLeft={1} gap={1} onMouseDown={() => setMarketSelectedIdx(i)}>
                           <text content={verified} fg={theme.primary} />
                           <text content={pad(domain, 28)} fg={active ? theme.text : theme.textSecondary} />
                           <text content={`$${price}`} fg={theme.warning} />
@@ -1237,7 +1241,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 const cached = domainScores.get(entry.domain);
                 const gr = cached?.grade ?? scoreGrade(0);
                 return (
-                  <box key={entry.domain} flexDirection="row" backgroundColor={active ? theme.primaryDim : "transparent"} paddingLeft={1} gap={1}>
+                  <box key={entry.domain} flexDirection="row" backgroundColor={active ? theme.primaryDim : "transparent"} paddingLeft={1} gap={1} onMouseDown={() => setSelectedIndex(i)}>
                     <text content={entry.tagged ? "◉" : " "} fg={entry.tagged ? theme.info : "transparent"} />
                     <text content={ss.icon} fg={ss.fg} />
                     <text content={entry.domain} fg={active ? theme.text : theme.textSecondary} />
@@ -1282,7 +1286,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           {selected && !showHelp && (
             <box flexDirection="row" paddingLeft={1} gap={1} flexShrink={0}>
               {(["overview", "dns", "security", "recon"] as IntelTab[]).map((tab) => (
-                <box key={tab} backgroundColor={intelTab === tab ? theme.primaryDim : "transparent"}>
+                <box key={tab} backgroundColor={intelTab === tab ? theme.primaryDim : "transparent"} onMouseDown={() => setIntelTab(tab)}>
                   <text content={` ${tab.toUpperCase()} `} fg={intelTab === tab ? theme.primary : theme.textDisabled} />
                 </box>
               ))}
@@ -1876,7 +1880,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     <text content="" />
                     <box flexDirection="row" gap={1} justifyContent="center">
                       <text content="◆" fg={theme.primary} />
-                      <text content="DOMAIN SNIPER" fg={theme.primary} />
+                      <text content="DOMAIN SNIPER v0.1.1" fg={theme.primary} />
                     </box>
                     <box justifyContent="center">
                       <text content="Domain Intelligence & Security Recon" fg={theme.textDisabled} />
@@ -2020,18 +2024,18 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           <box flexDirection="row" gap={1}>
             {mode !== "input" ? (
               (() => {
-                const footerHints: { key: string; label: string; priority: number }[] = [
-                  { key: "/", label: "scan", priority: 1 },
+                const footerHints: { key: string; label: string; priority: number; onClick?: () => void }[] = [
+                  { key: "/", label: "scan", priority: 1, onClick: () => { setInputMode("domain"); setMode("input"); setInputValue(""); } },
                   { key: "␣", label: "tag", priority: 2 },
-                  { key: "?", label: "help", priority: 3 },
-                  { key: "n", label: reconMode ? "recon:ON" : "recon", priority: 4 },
-                  { key: "M", label: "market", priority: 5 },
+                  { key: "?", label: "help", priority: 3, onClick: () => setShowHelp((v) => !v) },
+                  { key: "n", label: reconMode ? "recon:ON" : "recon", priority: 4, onClick: () => setReconMode((v) => !v) },
+                  { key: "M", label: "market", priority: 5, onClick: () => { if (!showMarket) { setShowMarket(true); setMarketView("browse"); setMarketSelectedIdx(0); void loadMarketListings(); } else { setShowMarket(false); } } },
                   { key: "S", label: "snipe", priority: 6 },
-                  { key: "e", label: "expand", priority: 7 },
+                  { key: "e", label: "expand", priority: 7, onClick: () => { setInputMode("expand"); setMode("input"); setInputValue(""); } },
                   { key: "Tab", label: "tabs", priority: 8 },
                   ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 9 }] : []),
                   { key: "d", label: "suggest", priority: 10 },
-                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 11 },
+                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 11, onClick: () => setShowPortfolio((v) => !v) },
                   { key: "p", label: "portfolio", priority: 12 },
                 ];
                 const maxHints = Math.floor((width - 20) / 10);
@@ -2039,7 +2043,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 return (
                   <>
                     {visibleHints.map((h) => (
-                      <box key={h.key} flexDirection="row" gap={0}>
+                      <box key={h.key} flexDirection="row" gap={0} onMouseDown={h.onClick}>
                         <box backgroundColor={theme.textDisabled}><text content={` ${h.key} `} fg={theme.background} /></box>
                         <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "P" && showPortfolio ? theme.primary : h.key === "M" && showMarket ? theme.secondary : theme.textMuted} />
                       </box>
@@ -2054,7 +2058,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
               </>
             )}
           </box>
-          <text content={stats.total > 0 ? `${stats.available + stats.expired}/${stats.total} actionable` : "v2.0"} fg={theme.textDisabled} />
+          <text content={stats.total > 0 ? `${stats.available + stats.expired}/${stats.total} actionable` : "v0.1.1"} fg={theme.textDisabled} />
         </box>
       </box>
     </box>
