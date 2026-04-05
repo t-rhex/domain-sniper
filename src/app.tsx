@@ -47,6 +47,8 @@ import { detectWaf } from "./features/waf-detect.js";
 import { scanPaths } from "./features/path-scanner.js";
 import { checkCors } from "./features/cors-check.js";
 import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getDomainByName, createSession as dbCreateSession, updateSessionCount } from "./db.js";
+import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, type PortfolioStatus, type TransactionType } from "./db.js";
+import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./features/portfolio-monitor.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -79,6 +81,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [inputValue, setInputValue] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [showPortfolio, setShowPortfolio] = useState(false);
   const [filter, setFilter] = useState<FilterConfig>({ ...DEFAULT_FILTER });
   const [logs, setLogs] = useState<{ id: number; time: string; msg: string; fg: string }[]>([
     { id: 0, time: ts(), msg: "Domain Sniper v2.0 initialized", fg: theme.textMuted },
@@ -343,6 +346,10 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (key === "?" && mode !== "input") { setShowHelp((v) => !v); return; }
     if (showHelp && key === "escape") { setShowHelp(false); return; }
     if (showHelp) return; // Consume all keys while help is shown
+
+    // Toggle portfolio dashboard
+    if (key === "P" && mode !== "input") { setShowPortfolio((v) => !v); return; }
+    if (showPortfolio && key === "escape") { setShowPortfolio(false); return; }
 
     // ── Tab switching for INTEL panel (Issue 1) ──
     if (key === "tab" && mode !== "input") {
@@ -733,7 +740,136 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
 
       {/* ═══ BODY ═══ */}
       <box flexGrow={1} flexDirection="row" minHeight={0}>
+      {showPortfolio ? (
+        <box flexGrow={1} flexDirection="column" paddingLeft={2} paddingRight={2} minHeight={0}>
+          <scrollbox flexGrow={1} minHeight={0} scrollbarOptions={{ visible: true }}>
+            {(() => {
+              const dash = getPortfolioDashboard();
+              const calendar = generateRenewalCalendar(6);
+              const annualCost = estimateAnnualRenewalCost();
+              const alerts = getUnacknowledgedAlerts();
+              const monthly = getMonthlyReport(6);
 
+              return (
+                <box flexDirection="column" gap={0}>
+                  {/* Header */}
+                  <box flexDirection="row" gap={2} paddingTop={1}>
+                    <box backgroundColor={theme.primary}><text content=" PORTFOLIO DASHBOARD " fg={theme.background} /></box>
+                    <text content={`${dash.totalDomains} domains`} fg={theme.text} />
+                    <text content={`$${dash.totalValue.toFixed(0)} value`} fg={theme.primary} />
+                    <text content="(Press P to close)" fg={theme.textDisabled} />
+                  </box>
+
+                  <text content="" />
+
+                  {/* Summary cards row */}
+                  <box flexDirection="row" gap={3}>
+                    <box flexDirection="column">
+                      <text content="FINANCIALS" fg={theme.secondary} />
+                      <text content={`  Costs:   $${dash.totalCosts.toFixed(2)}`} fg={theme.error} />
+                      <text content={`  Revenue: $${dash.totalRevenue.toFixed(2)}`} fg={theme.primary} />
+                      <text content={`  Profit:  $${dash.totalProfit.toFixed(2)}`} fg={dash.totalProfit >= 0 ? theme.primary : theme.error} />
+                      <text content={`  Annual renewals: ~$${annualCost.toFixed(0)}`} fg={theme.textMuted} />
+                    </box>
+                    <box flexDirection="column">
+                      <text content="STATUS" fg={theme.secondary} />
+                      {Object.entries(dash.byStatus).map(([status, count]) => (
+                        <text key={status} content={`  ${status}: ${count}`} fg={theme.textSecondary} />
+                      ))}
+                    </box>
+                    <box flexDirection="column">
+                      <text content="CATEGORIES" fg={theme.secondary} />
+                      {Object.entries(dash.byCategory).map(([cat, count]) => (
+                        <text key={cat} content={`  ${cat}: ${count}`} fg={theme.textSecondary} />
+                      ))}
+                    </box>
+                  </box>
+
+                  <text content="" />
+
+                  {/* Alerts */}
+                  {alerts.length > 0 && (
+                    <box flexDirection="column">
+                      <text content={`ALERTS (${alerts.length})`} fg={theme.warning} />
+                      {alerts.slice(0, 5).map((a) => (
+                        <text key={a.id} content={`  ${a.severity === "critical" ? "!!" : a.severity === "warning" ? "! " : "· "} ${a.domain}: ${a.message}`} fg={a.severity === "critical" ? theme.error : a.severity === "warning" ? theme.warning : theme.textSecondary} />
+                      ))}
+                      {alerts.length > 5 && <text content={`  +${alerts.length - 5} more`} fg={theme.textDisabled} />}
+                    </box>
+                  )}
+
+                  <text content="" />
+
+                  {/* Renewal Calendar */}
+                  {calendar.length > 0 && (
+                    <box flexDirection="column">
+                      <text content="UPCOMING RENEWALS" fg={theme.secondary} />
+                      {calendar.slice(0, 8).map((r) => (
+                        <box key={r.domain} flexDirection="row" gap={2}>
+                          <text content={`  ${pad(r.domain, 30)}`} fg={r.daysLeft <= 7 ? theme.error : r.daysLeft <= 30 ? theme.warning : theme.text} />
+                          <text content={`${r.daysLeft}d`} fg={r.daysLeft <= 7 ? theme.error : r.daysLeft <= 30 ? theme.warning : theme.textMuted} />
+                          <text content={`$${r.renewalPrice}`} fg={theme.textDisabled} />
+                          {r.autoRenew && <text content="auto" fg={theme.primary} />}
+                        </box>
+                      ))}
+                    </box>
+                  )}
+
+                  <text content="" />
+
+                  {/* Top valued domains */}
+                  {dash.topValueDomains.length > 0 && (
+                    <box flexDirection="column">
+                      <text content="TOP VALUED DOMAINS" fg={theme.secondary} />
+                      {dash.topValueDomains.map((d) => (
+                        <text key={d.domain} content={`  ${pad(d.domain, 30)} $${d.estimated_value.toFixed(0)}`} fg={theme.text} />
+                      ))}
+                    </box>
+                  )}
+
+                  <text content="" />
+
+                  {/* Monthly P&L */}
+                  {monthly.length > 0 && (
+                    <box flexDirection="column">
+                      <text content="MONTHLY P&L" fg={theme.secondary} />
+                      {monthly.map((m) => (
+                        <box key={m.month} flexDirection="row" gap={2}>
+                          <text content={`  ${m.month}`} fg={theme.textMuted} />
+                          <text content={`-$${m.costs.toFixed(0)}`} fg={theme.error} />
+                          <text content={`+$${m.revenue.toFixed(0)}`} fg={theme.primary} />
+                          <text content={`= $${m.profit.toFixed(0)}`} fg={m.profit >= 0 ? theme.primary : theme.error} />
+                        </box>
+                      ))}
+                    </box>
+                  )}
+
+                  <text content="" />
+
+                  {/* Recent transactions */}
+                  {dash.recentTransactions.length > 0 && (
+                    <box flexDirection="column">
+                      <text content="RECENT TRANSACTIONS" fg={theme.secondary} />
+                      {dash.recentTransactions.map((t, i) => (
+                        <text key={i} content={`  ${t.date}  ${pad(t.type, 18)} ${t.amount >= 0 ? "+" : ""}$${t.amount.toFixed(2)}  ${t.domain}`} fg={theme.textSecondary} />
+                      ))}
+                    </box>
+                  )}
+
+                  {/* Pipeline count */}
+                  {dash.pipelineCount > 0 && (
+                    <>
+                      <text content="" />
+                      <text content={`PIPELINE: ${dash.pipelineCount} domain(s) being tracked`} fg={theme.info} />
+                    </>
+                  )}
+                </box>
+              );
+            })()}
+          </scrollbox>
+        </box>
+      ) : (
+        <>
         {/* ─── LEFT PANEL ─── */}
         <box width={sidebarW} flexDirection="column" minHeight={0}>
           <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
@@ -843,6 +979,10 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="                Enables port scan, WAF, headers," fg={theme.textDisabled} />
                 <text content="                CORS, zone transfer, takeover detect" fg={theme.textDisabled} />
                 <text content="                (rescan required after toggling)" fg={theme.textDisabled} />
+                <text content="" />
+                <text content="Portfolio" fg={theme.secondary} />
+                <text content="  P             Portfolio dashboard" fg={theme.textSecondary} />
+                <text content="  p             Add selected to portfolio" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Session" fg={theme.secondary} />
                 <text content="  Ctrl+S        Save session" fg={theme.textSecondary} />
@@ -1337,6 +1477,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
             </box>
           )}
         </box>
+        </>
+      )}
       </box>
 
       {/* ═══ INPUT BAR ═══ */}
@@ -1372,7 +1514,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   { key: "Tab", label: "tabs", priority: 6 },
                   ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 7 }] : []),
                   { key: "d", label: "suggest", priority: 8 },
-                  { key: "p", label: "portfolio", priority: 9 },
+                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 9 },
+                  { key: "p", label: "portfolio", priority: 10 },
                 ];
                 const maxHints = Math.floor((width - 20) / 10);
                 const visibleHints = footerHints.slice(0, maxHints);
@@ -1381,7 +1524,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     {visibleHints.map((h) => (
                       <box key={h.key} flexDirection="row" gap={0}>
                         <box backgroundColor={theme.textDisabled}><text content={` ${h.key} `} fg={theme.background} /></box>
-                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : theme.textMuted} />
+                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "P" && showPortfolio ? theme.primary : theme.textMuted} />
                       </box>
                     ))}
                   </>
