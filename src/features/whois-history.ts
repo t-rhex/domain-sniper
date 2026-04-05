@@ -1,16 +1,14 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
-import { join } from "path";
+/**
+ * WHOIS history tracking — SQLite-backed snapshot storage
+ */
+
+import {
+  saveWhoisSnapshotDb,
+  getWhoisHistoryDb,
+  getWhoisHistoryCountDb,
+} from "../db.js";
 import { isValidDomain } from "../validate.js";
 import type { WhoisResult } from "../whois.js";
-import { WHOIS_HISTORY_DIR } from "../paths.js";
-
-const HISTORY_DIR = WHOIS_HISTORY_DIR;
-
-function ensureDir(domain: string): string {
-  const dir = join(HISTORY_DIR, domain.replace(/[^a-z0-9.-]/gi, "_"));
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return dir;
-}
 
 export interface WhoisSnapshot {
   timestamp: string;
@@ -31,10 +29,9 @@ export interface WhoisDiff {
   new: string;
 }
 
-function toSnapshot(whois: WhoisResult): WhoisSnapshot {
-  return {
-    timestamp: new Date().toISOString(),
-    domain: whois.domain,
+export function saveWhoisSnapshot(whois: WhoisResult): string {
+  if (!isValidDomain(whois.domain)) throw new Error(`Invalid domain: ${whois.domain}`);
+  const id = saveWhoisSnapshotDb(whois.domain, {
     registrar: whois.registrar,
     expiryDate: whois.expiryDate,
     createdDate: whois.createdDate,
@@ -43,36 +40,30 @@ function toSnapshot(whois: WhoisResult): WhoisSnapshot {
     nameServers: whois.nameServers,
     available: whois.available,
     expired: whois.expired,
-  };
+    rawText: whois.rawText,
+  });
+  return `db:whois-${id}`;
 }
 
-export function saveWhoisSnapshot(whois: WhoisResult): string {
-  if (!isValidDomain(whois.domain)) throw new Error(`Invalid domain: ${whois.domain}`);
-  const dir = ensureDir(whois.domain);
-  const snapshot = toSnapshot(whois);
-  const filename = `${Date.now()}.json`;
-  const path = join(dir, filename);
-  writeFileSync(path, JSON.stringify(snapshot, null, 2), "utf-8");
-  return path;
+function dbRowToSnapshot(row: any): WhoisSnapshot {
+  return {
+    timestamp: row.snapshot_at,
+    domain: row.domain,
+    registrar: row.registrar,
+    expiryDate: row.expiry_date,
+    createdDate: row.created_date,
+    updatedDate: row.updated_date,
+    status: (() => { try { return JSON.parse(row.status || "[]"); } catch { return []; } })(),
+    nameServers: (() => { try { return JSON.parse(row.name_servers || "[]"); } catch { return []; } })(),
+    available: !!row.available,
+    expired: !!row.expired,
+  };
 }
 
 export function getWhoisHistory(domain: string): WhoisSnapshot[] {
   if (!isValidDomain(domain)) return [];
-  const dir = join(HISTORY_DIR, domain.replace(/[^a-z0-9.-]/gi, "_"));
-  if (!existsSync(dir)) return [];
-
-  try {
-    const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".json"))
-      .sort(); // chronological by timestamp filename
-
-    return files.map((f) => {
-      const content = readFileSync(join(dir, f), "utf-8");
-      return JSON.parse(content) as WhoisSnapshot;
-    });
-  } catch {
-    return [];
-  }
+  const rows = getWhoisHistoryDb(domain);
+  return rows.map(dbRowToSnapshot).reverse(); // oldest first
 }
 
 export function diffWhoisSnapshots(
@@ -83,29 +74,17 @@ export function diffWhoisSnapshots(
   const fields: (keyof WhoisSnapshot)[] = [
     "registrar", "expiryDate", "createdDate", "updatedDate", "available", "expired",
   ];
-
   for (const field of fields) {
     const oldVal = String(older[field] ?? "");
     const newVal = String(newer[field] ?? "");
-    if (oldVal !== newVal) {
-      diffs.push({ field, old: oldVal, new: newVal });
-    }
+    if (oldVal !== newVal) diffs.push({ field, old: oldVal, new: newVal });
   }
-
-  // Compare status arrays
-  const oldStatus = older.status.sort().join(", ");
-  const newStatus = newer.status.sort().join(", ");
-  if (oldStatus !== newStatus) {
-    diffs.push({ field: "status", old: oldStatus, new: newStatus });
-  }
-
-  // Compare nameservers
-  const oldNs = older.nameServers.sort().join(", ");
-  const newNs = newer.nameServers.sort().join(", ");
-  if (oldNs !== newNs) {
-    diffs.push({ field: "nameServers", old: oldNs, new: newNs });
-  }
-
+  const oldStatus = [...older.status].sort().join(", ");
+  const newStatus = [...newer.status].sort().join(", ");
+  if (oldStatus !== newStatus) diffs.push({ field: "status", old: oldStatus, new: newStatus });
+  const oldNs = [...older.nameServers].sort().join(", ");
+  const newNs = [...newer.nameServers].sort().join(", ");
+  if (oldNs !== newNs) diffs.push({ field: "nameServers", old: oldNs, new: newNs });
   return diffs;
 }
 
@@ -116,5 +95,5 @@ export function getLatestDiff(domain: string): WhoisDiff[] | null {
 }
 
 export function getHistoryCount(domain: string): number {
-  return getWhoisHistory(domain).length;
+  return getWhoisHistoryCountDb(domain);
 }
