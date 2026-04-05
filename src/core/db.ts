@@ -277,6 +277,27 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_alerts_ack ON portfolio_alerts(acknowledged);
     `,
   },
+  {
+    name: "013_create_snipes",
+    sql: `
+      CREATE TABLE IF NOT EXISTS snipes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'watching',
+        phase TEXT NOT NULL DEFAULT 'hourly',
+        expiry_date TEXT,
+        registrar_provider TEXT,
+        max_price REAL,
+        check_count INTEGER DEFAULT 0,
+        last_checked TEXT,
+        last_status TEXT,
+        registered_at TEXT,
+        notification_sent INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `,
+  },
 ];
 
 // ─── Row types ───────────────────────────────────────────
@@ -1218,4 +1239,75 @@ export function importLegacySessions(sessionDir: string): number {
   } catch {
     return 0;
   }
+}
+
+// ─── Snipe CRUD ──────────────────────────────────────────
+
+export type SnipeStatus = "watching" | "expiring" | "dropping" | "registering" | "registered" | "failed" | "cancelled";
+export type SnipePhase = "hourly" | "frequent" | "aggressive";
+
+export function addSnipe(domain: string, details: {
+  expiryDate?: string; registrarProvider?: string; maxPrice?: number;
+} = {}): number {
+  const db = getDb();
+  const result = db.run(`
+    INSERT INTO snipes (domain, expiry_date, registrar_provider, max_price)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(domain) DO UPDATE SET
+      status = 'watching',
+      phase = 'hourly',
+      expiry_date = COALESCE(excluded.expiry_date, snipes.expiry_date),
+      registrar_provider = COALESCE(excluded.registrar_provider, snipes.registrar_provider),
+      max_price = COALESCE(excluded.max_price, snipes.max_price),
+      updated_at = datetime('now')
+  `, [domain, details.expiryDate || null, details.registrarProvider || null, details.maxPrice || null]);
+  return Number(result.lastInsertRowid);
+}
+
+export function getSnipe(domain: string): any | null {
+  return getDb().query("SELECT * FROM snipes WHERE domain = ?").get(domain);
+}
+
+export function getActiveSnipes(): any[] {
+  return getDb().query("SELECT * FROM snipes WHERE status IN ('watching', 'expiring', 'dropping', 'registering') ORDER BY expiry_date ASC").all();
+}
+
+export function getAllSnipes(): any[] {
+  return getDb().query("SELECT * FROM snipes ORDER BY created_at DESC").all();
+}
+
+export function updateSnipeStatus(domain: string, status: SnipeStatus, phase?: SnipePhase): void {
+  const db = getDb();
+  if (phase) {
+    db.run("UPDATE snipes SET status = ?, phase = ?, updated_at = datetime('now') WHERE domain = ?", [status, phase, domain]);
+  } else {
+    db.run("UPDATE snipes SET status = ?, updated_at = datetime('now') WHERE domain = ?", [status, domain]);
+  }
+}
+
+export function updateSnipeCheck(domain: string, lastStatus: string): void {
+  getDb().run("UPDATE snipes SET check_count = check_count + 1, last_checked = datetime('now'), last_status = ?, updated_at = datetime('now') WHERE domain = ?", [lastStatus, domain]);
+}
+
+export function markSnipeRegistered(domain: string): void {
+  getDb().run("UPDATE snipes SET status = 'registered', registered_at = datetime('now'), updated_at = datetime('now') WHERE domain = ?", [domain]);
+}
+
+export function removeSnipe(domain: string): void {
+  getDb().run("DELETE FROM snipes WHERE domain = ?", [domain]);
+}
+
+export function getSnipeStats(): { total: number; watching: number; expiring: number; dropping: number; registered: number; failed: number } {
+  const db = getDb();
+  const rows = db.query("SELECT status, COUNT(*) as c FROM snipes GROUP BY status").all() as Array<{ status: string; c: number }>;
+  const stats: Record<string, number> = {};
+  for (const r of rows) stats[r.status] = r.c;
+  return {
+    total: Object.values(stats).reduce((a, b) => a + b, 0),
+    watching: stats["watching"] || 0,
+    expiring: stats["expiring"] || 0,
+    dropping: stats["dropping"] || 0,
+    registered: stats["registered"] || 0,
+    failed: stats["failed"] || 0,
+  };
 }
