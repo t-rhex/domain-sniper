@@ -29,6 +29,7 @@ import { sendWebhook } from "./core/features/webhooks.js";
 import { loadConfig } from "./core/features/config.js";
 import { generateSuggestions } from "./core/features/domain-suggest.js";
 import { addToPortfolio } from "./core/features/portfolio.js";
+import { snipeDomain, getSnipeTargets, cancelSnipe } from "./core/features/snipe.js";
 import {
   isLoggedIn, getAuthInfo, browseListings, viewListing,
   createListingApi, makeOffer, getMyListings, getMyOffers,
@@ -52,7 +53,7 @@ import { detectWaf } from "./core/features/waf-detect.js";
 import { scanPaths } from "./core/features/path-scanner.js";
 import { checkCors } from "./core/features/cors-check.js";
 import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getDomainByName, createSession as dbCreateSession, updateSessionCount, getDbStats, getAllDomains, getPortfolioExpiring } from "./core/db.js";
-import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, type PortfolioStatus, type TransactionType } from "./core/db.js";
+import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, getSnipeStats, type PortfolioStatus, type TransactionType } from "./core/db.js";
 import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./core/features/portfolio-monitor.js";
 
 // ─── Types ────────────────────────────────────────────────
@@ -718,6 +719,22 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
 
+      // Snipe selected domain
+      else if (key === "S" && selected) {
+        if (selected.status === "taken" || selected.status === "expired") {
+          snipeDomain(selected.domain, {
+            expiryDate: selected.whois?.expiryDate || undefined,
+          });
+          const phase = selected.status === "expired" ? "frequent" : "hourly";
+          log(`Sniping ${selected.domain} — ${selected.status === "expired" ? "expired, checking every 5 min" : "watching for expiry"}`, theme.warning);
+          log(`Run 'domain-sniper snipe run' to start the engine`, theme.textDisabled);
+        } else if (selected.status === "available") {
+          log(`${selected.domain} is already available — press r to register now`, theme.primary);
+        } else {
+          log(`Cannot snipe ${selected.domain} (status: ${selected.status})`, theme.textMuted);
+        }
+      }
+
       // Clear cache for selected domain
       else if (key === "c" && selected) {
         const count = clearCache(selected.domain);
@@ -955,6 +972,14 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 {marketUnread > 0 && <text content={`✉${marketUnread}`} fg={theme.warning} />}
               </box>
             )}
+            {(() => {
+              try {
+                const snipeStats = getSnipeStats();
+                return snipeStats.total > 0 ? (
+                  <text content={`⊕ ${snipeStats.total} sniping`} fg={theme.warning} />
+                ) : null;
+              } catch { return null; }
+            })()}
           </box>
         </box>
         <text content={dLine(width)} fg={theme.border} paddingLeft={1} />
@@ -1290,6 +1315,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  R             Bulk register tagged (2x)" fg={theme.textSecondary} />
                 <text content="  d             Suggest similar domains" fg={theme.textSecondary} />
                 <text content="  p             Add to portfolio" fg={theme.textSecondary} />
+                <text content="  S             Snipe domain (auto-register when it drops)" fg={theme.textSecondary} />
                 <text content="  D             Drop catch (expired only)" fg={theme.textSecondary} />
                 <text content="  c             Clear cache for selected" fg={theme.textSecondary} />
                 <text content="  h             Show scan history" fg={theme.textSecondary} />
@@ -2000,12 +2026,13 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   { key: "?", label: "help", priority: 3 },
                   { key: "n", label: reconMode ? "recon:ON" : "recon", priority: 4 },
                   { key: "M", label: "market", priority: 5 },
-                  { key: "e", label: "expand", priority: 6 },
-                  { key: "Tab", label: "tabs", priority: 7 },
-                  ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 8 }] : []),
-                  { key: "d", label: "suggest", priority: 9 },
-                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 10 },
-                  { key: "p", label: "portfolio", priority: 11 },
+                  { key: "S", label: "snipe", priority: 6 },
+                  { key: "e", label: "expand", priority: 7 },
+                  { key: "Tab", label: "tabs", priority: 8 },
+                  ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 9 }] : []),
+                  { key: "d", label: "suggest", priority: 10 },
+                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 11 },
+                  { key: "p", label: "portfolio", priority: 12 },
                 ];
                 const maxHints = Math.floor((width - 20) / 10);
                 const visibleHints = footerHints.slice(0, maxHints);
