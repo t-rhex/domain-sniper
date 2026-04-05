@@ -35,6 +35,17 @@ import { checkBlacklists } from "./features/blacklist-check.js";
 import { estimateBacklinks } from "./features/backlinks.js";
 import { saveWhoisSnapshot, getLatestDiff, getHistoryCount } from "./features/whois-history.js";
 import { createDropCatcher, formatDropCatchStatus, type DropCatchStatus } from "./features/drop-catch.js";
+import { scanPorts } from "./features/port-scanner.js";
+import { reverseIpLookup } from "./features/reverse-ip.js";
+import { lookupAsn } from "./features/asn-lookup.js";
+import { checkEmailSecurity } from "./features/email-security.js";
+import { checkZoneTransfer } from "./features/zone-transfer.js";
+import { queryCertTransparency } from "./features/cert-transparency.js";
+import { detectTakeover } from "./features/takeover-detect.js";
+import { auditSecurityHeaders } from "./features/security-headers.js";
+import { detectWaf } from "./features/waf-detect.js";
+import { scanPaths } from "./features/path-scanner.js";
+import { checkCors } from "./features/cors-check.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -71,6 +82,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     { time: ts(), msg: "Press ? for all commands", fg: theme.textMuted },
   ]);
   const [registrarConfig] = useState<RegistrarConfig | null>(loadConfigFromEnv());
+  const [reconMode, setReconMode] = useState(false);
   const [watcher, setWatcher] = useState<DomainWatcher | null>(null);
   const [watchCycle, setWatchCycle] = useState(0);
   const { width, height } = useTerminalDimensions();
@@ -142,6 +154,34 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       entry.backlinks = backlinks;
       entry.domainAge = calculateDomainAge(entry.whois?.createdDate ?? null);
 
+      // Recon features — only run in recon mode
+      if (reconMode) {
+        const [ports, reverseIp, asn, emailSec, zoneXfer, certs, takeover, secHeaders, waf, paths, cors] = await Promise.all([
+          scanPorts(domain).catch(() => null),
+          reverseIpLookup(domain).catch(() => null),
+          lookupAsn(domain).catch(() => null),
+          checkEmailSecurity(domain).catch(() => null),
+          checkZoneTransfer(domain).catch(() => null),
+          queryCertTransparency(domain).catch(() => null),
+          detectTakeover(domain).catch(() => null),
+          auditSecurityHeaders(domain).catch(() => null),
+          detectWaf(domain).catch(() => null),
+          scanPaths(domain).catch(() => null),
+          checkCors(domain).catch(() => null),
+        ]);
+        entry.portScan = ports;
+        entry.reverseIp = reverseIp;
+        entry.asn = asn;
+        entry.emailSecurity = emailSec;
+        entry.zoneTransfer = zoneXfer;
+        entry.certTransparency = certs;
+        entry.takeover = takeover;
+        entry.securityHeaders = secHeaders;
+        entry.waf = waf;
+        entry.pathScan = paths;
+        entry.cors = cors;
+      }
+
       // Save WHOIS snapshot for history tracking
       if (entry.whois && !entry.whois.error) {
         try { saveWhoisSnapshot(entry.whois); } catch {}
@@ -166,7 +206,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       log(`ERR ${domain}: ${message}`, theme.error);
       return entry;
     }
-  }, [registrarConfig, log]);
+  }, [registrarConfig, reconMode, log]);
 
   const processAllDomains = useCallback(async (domainList: string[], append = false) => {
     if (processingRef.current) return;
@@ -399,6 +439,12 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
 
+      // Toggle recon mode
+      else if (key === "n") {
+        setReconMode((v) => !v);
+        log(reconMode ? "Recon mode OFF (fast scan)" : "Recon mode ON (full pentest)", reconMode ? theme.textMuted : theme.warning);
+      }
+
       // Add to portfolio
       else if (key === "p" && selected) {
         try {
@@ -550,6 +596,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
             {filter.sort !== "domain" && (
               <box backgroundColor={theme.accentDim}><text content={` ↕${filter.sort} `} fg={theme.accent} /></box>
             )}
+            {reconMode && (
+              <box backgroundColor={theme.errorDim}><text content=" RECON " fg={theme.error} /></box>
+            )}
           </box>
           <box flexDirection="row" gap={2}>
             {stats.total > 0 && (
@@ -665,6 +714,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  s             Cycle status filter" fg={theme.textSecondary} />
                 <text content="  o             Cycle sort field" fg={theme.textSecondary} />
                 <text content="  O             Toggle sort order" fg={theme.textSecondary} />
+                <text content="" />
+                <text content="Recon" fg={theme.secondary} />
+                <text content="  n             Toggle recon mode" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Session" fg={theme.secondary} />
                 <text content="  Ctrl+S        Save session" fg={theme.textSecondary} />
@@ -929,6 +981,143 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   </box>
                 )}
 
+                {/* Port Scan */}
+                {selected.portScan && selected.portScan.openPorts.length > 0 && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.error} /><text content={`OPEN PORTS (${selected.portScan.openPorts.length})`} fg={theme.error} /></box>
+                    {selected.portScan.openPorts.slice(0, 10).map((p) => (
+                      <box key={p.port} flexDirection="row" gap={1}>
+                        <text content="┃" fg={theme.borderSubtle} />
+                        <text content={pad(String(p.port), 6)} fg={theme.warning} />
+                        <text content={pad(p.service, 12)} fg={theme.text} />
+                        {p.banner && <text content={p.banner.slice(0, 40)} fg={theme.textDisabled} />}
+                      </box>
+                    ))}
+                    {selected.portScan.ip && <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`IP: ${selected.portScan.ip} (${selected.portScan.scanTime}ms)`} fg={theme.textDisabled} /></box>}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* ASN / Network */}
+                {selected.asn && !selected.asn.error && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.info} /><text content="NETWORK" fg={theme.info} /></box>
+                    {selected.asn.asn && <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("ASN", 12)} fg={theme.textMuted} /><text content={`${selected.asn.asn}${selected.asn.asnName ? ` (${selected.asn.asnName})` : ""}`} fg={theme.text} /></box>}
+                    {selected.asn.org && <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Org", 12)} fg={theme.textMuted} /><text content={selected.asn.org} fg={theme.text} /></box>}
+                    {selected.asn.country && <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("Location", 12)} fg={theme.textMuted} /><text content={`${selected.asn.city || ""}${selected.asn.city && selected.asn.country ? ", " : ""}${selected.asn.country}`} fg={theme.textSecondary} /></box>}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Reverse IP */}
+                {selected.reverseIp && selected.reverseIp.sharedDomains.length > 0 && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.warning} /><text content={`SHARED HOSTING (${selected.reverseIp.sharedDomains.length} domains on ${selected.reverseIp.ip})`} fg={theme.warning} /></box>
+                    {selected.reverseIp.sharedDomains.slice(0, 6).map((d) => (
+                      <box key={d} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={d} fg={theme.textSecondary} /></box>
+                    ))}
+                    {selected.reverseIp.sharedDomains.length > 6 && <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`  +${selected.reverseIp.sharedDomains.length - 6} more`} fg={theme.textDisabled} /></box>}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Email Security */}
+                {selected.emailSecurity && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={selected.emailSecurity.grade <= "B" ? theme.primary : theme.error} /><text content={`EMAIL SECURITY (${selected.emailSecurity.grade})`} fg={selected.emailSecurity.grade <= "B" ? theme.primary : theme.error} /></box>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("SPF", 12)} fg={theme.textMuted} /><text content={selected.emailSecurity.spf.found ? "Found" : "Missing"} fg={selected.emailSecurity.spf.found ? theme.primary : theme.error} /></box>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("DKIM", 12)} fg={theme.textMuted} /><text content={selected.emailSecurity.dkim.found ? `Found (${selected.emailSecurity.dkim.selector})` : "Missing"} fg={selected.emailSecurity.dkim.found ? theme.primary : theme.error} /></box>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={pad("DMARC", 12)} fg={theme.textMuted} /><text content={selected.emailSecurity.dmarc.found ? `p=${selected.emailSecurity.dmarc.policy || "?"}` : "Missing"} fg={selected.emailSecurity.dmarc.found ? theme.primary : theme.error} /></box>
+                    {selected.emailSecurity.issues.slice(0, 3).map((issue, i) => (
+                      <box key={i} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`! ${issue}`} fg={theme.warning} /></box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Security Headers */}
+                {selected.securityHeaders && !selected.securityHeaders.error && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={selected.securityHeaders.grade <= "B" ? theme.primary : theme.error} /><text content={`SECURITY HEADERS (${selected.securityHeaders.grade} — ${selected.securityHeaders.score}/100)`} fg={selected.securityHeaders.grade <= "B" ? theme.primary : theme.error} /></box>
+                    {selected.securityHeaders.missing.slice(0, 4).map((h) => (
+                      <box key={h} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`x ${h}`} fg={theme.error} /></box>
+                    ))}
+                    {selected.securityHeaders.headers.filter((h) => h.status === "good").slice(0, 3).map((h) => (
+                      <box key={h.name} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`+ ${h.name}`} fg={theme.primary} /></box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* WAF */}
+                {selected.waf && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.accent} /><text content={selected.waf.detected ? `WAF: ${selected.waf.waf} (${selected.waf.confidence})` : "WAF: None detected"} fg={selected.waf.detected ? theme.accent : theme.textDisabled} /></box>
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Zone Transfer */}
+                {selected.zoneTransfer && selected.zoneTransfer.vulnerable && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.error} /><text content="!! ZONE TRANSFER VULNERABLE" fg={theme.error} /></box>
+                    {selected.zoneTransfer.vulnerableNs.map((ns) => (
+                      <box key={ns} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={ns} fg={theme.error} /></box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Cert Transparency */}
+                {selected.certTransparency && selected.certTransparency.subdomains.length > 0 && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.secondary} /><text content={`CERT TRANSPARENCY (${selected.certTransparency.subdomains.length} subdomains, ${selected.certTransparency.totalCerts} certs)`} fg={theme.secondary} /></box>
+                    {selected.certTransparency.subdomains.slice(0, 8).map((s) => (
+                      <box key={s} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={s} fg={theme.textSecondary} /></box>
+                    ))}
+                    {selected.certTransparency.subdomains.length > 8 && <box flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`  +${selected.certTransparency.subdomains.length - 8} more`} fg={theme.textDisabled} /></box>}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Takeover Detection */}
+                {selected.takeover && selected.takeover.vulnerable && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.error} /><text content="!! SUBDOMAIN TAKEOVER" fg={theme.error} /></box>
+                    {selected.takeover.findings.filter((f) => f.status === "vulnerable").map((f) => (
+                      <box key={f.subdomain} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={`${f.subdomain} -> ${f.service}`} fg={theme.error} /></box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* Path Scanner */}
+                {selected.pathScan && selected.pathScan.findings.length > 0 && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.error} /><text content={`EXPOSED PATHS (${selected.pathScan.findings.length})`} fg={theme.error} /></box>
+                    {selected.pathScan.findings.slice(0, 8).map((f) => (
+                      <box key={f.path} flexDirection="row" gap={1}>
+                        <text content="┃" fg={theme.borderSubtle} />
+                        <text content={f.severity === "critical" ? "!!" : f.severity === "high" ? "! " : ". "} fg={f.severity === "critical" ? theme.error : f.severity === "high" ? theme.warning : theme.textMuted} />
+                        <text content={f.path} fg={f.severity === "critical" ? theme.error : theme.text} />
+                        <text content={`${f.status}`} fg={theme.textDisabled} />
+                      </box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
+                {/* CORS */}
+                {selected.cors && selected.cors.vulnerable && (
+                  <box flexDirection="column" paddingLeft={1}>
+                    <box flexDirection="row" gap={1}><text content="┃" fg={theme.error} /><text content="!! CORS MISCONFIGURATION" fg={theme.error} /></box>
+                    {selected.cors.findings.filter((f) => f.allowed).slice(0, 3).map((f, i) => (
+                      <box key={i} flexDirection="row" gap={1}><text content="┃" fg={theme.borderSubtle} /><text content={f.detail} fg={theme.error} /></box>
+                    ))}
+                    <text content="" />
+                  </box>
+                )}
+
                 {/* WHOIS History */}
                 {(() => {
                   const histCount = getHistoryCount(selected.domain);
@@ -1010,6 +1199,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 {registrarConfig?.apiKey && (<><box backgroundColor={theme.textDisabled}><text content=" r " fg={theme.background} /></box><text content="reg" fg={theme.textMuted} /></>)}
                 <box backgroundColor={theme.textDisabled}><text content=" d " fg={theme.background} /></box><text content="suggest" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" p " fg={theme.background} /></box><text content="portfolio" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" n " fg={theme.background} /></box><text content={reconMode ? "recon:ON" : "recon"} fg={reconMode ? theme.error : theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" ? " fg={theme.background} /></box><text content="help" fg={theme.textMuted} />
               </>
             ) : (
