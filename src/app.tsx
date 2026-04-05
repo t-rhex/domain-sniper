@@ -90,7 +90,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [showPortfolio, setShowPortfolio] = useState(false);
   const [filter, setFilter] = useState<FilterConfig>({ ...DEFAULT_FILTER });
   const [logs, setLogs] = useState<{ id: number; time: string; msg: string; fg: string }[]>([
-    { id: 0, time: ts(), msg: "Domain Sniper v0.1.1 initialized", fg: theme.textMuted },
+    { id: 0, time: ts(), msg: "Domain Sniper v0.1.2 initialized", fg: theme.textMuted },
     { id: 1, time: ts(), msg: "Press ? for all commands", fg: theme.textMuted },
   ]);
   const [registrarConfig] = useState<RegistrarConfig | null>(loadConfigFromEnv());
@@ -1880,7 +1880,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     <text content="" />
                     <box flexDirection="row" gap={1} justifyContent="center">
                       <text content="◆" fg={theme.primary} />
-                      <text content="DOMAIN SNIPER v0.1.1" fg={theme.primary} />
+                      <text content="DOMAIN SNIPER v0.1.2" fg={theme.primary} />
                     </box>
                     <box justifyContent="center">
                       <text content="Domain Intelligence & Security Recon" fg={theme.textDisabled} />
@@ -2058,7 +2058,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
               </>
             )}
           </box>
-          <text content={stats.total > 0 ? `${stats.available + stats.expired}/${stats.total} actionable` : "v0.1.1"} fg={theme.textDisabled} />
+          <text content={stats.total > 0 ? `${stats.available + stats.expired}/${stats.total} actionable` : "v0.1.2"} fg={theme.textDisabled} />
         </box>
       </box>
     </box>
