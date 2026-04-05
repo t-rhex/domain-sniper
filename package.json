@@ -15,7 +15,11 @@
     "headless": "bun run src/index.tsx --headless",
     "serve": "bun run marketplace/index.ts",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "build": "bun build src/index.tsx --compile --outfile domain-sniper",
+    "build:linux": "bun build src/index.tsx --compile --target=bun-linux-x64 --outfile domain-sniper-linux",
+    "build:mac": "bun build src/index.tsx --compile --target=bun-darwin-arm64 --outfile domain-sniper-mac",
+    "build:win": "bun build src/index.tsx --compile --target=bun-windows-x64 --outfile domain-sniper.exe"
   },
   "keywords": [
     "domain",
