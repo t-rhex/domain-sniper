@@ -1,10 +1,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
 import type { RegistrarProvider } from "../registrar.js";
+import { APP_DIR, CONFIG_FILE } from "../paths.js";
 
-const CONFIG_DIR = join(homedir(), ".domain-sniper");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const CONFIG_DIR = APP_DIR;
 
 export interface DomainSniperConfig {
   concurrency: number;

@@ -8,11 +8,11 @@ export const DOMAIN_RE =
   /^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*\.[a-z]{2,}$/;
 
 /**
- * Check if a string is a valid domain name
+ * Check if a string is a valid domain name (case-insensitive)
  */
 export function isValidDomain(domain: string): boolean {
   if (domain.length > 253) return false;
-  return DOMAIN_RE.test(domain);
+  return DOMAIN_RE.test(domain.toLowerCase());
 }
 
 /**
@@ -25,10 +25,12 @@ export function assertValidDomain(domain: string): void {
 }
 
 /**
- * Filter a list of domains to only valid ones
+ * Filter and normalize a list of domains to only valid ones (lowercased)
  */
 export function sanitizeDomainList(domains: string[]): string[] {
-  return domains.filter(isValidDomain);
+  return domains
+    .map((d) => d.toLowerCase())
+    .filter(isValidDomain);
 }
 
 /**

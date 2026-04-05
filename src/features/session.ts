@@ -3,12 +3,10 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
+import { join } from "path";
 import { isValidSessionId } from "../validate.js";
 import type { DomainEntry } from "../types.js";
-import { join } from "path";
-import { homedir } from "os";
-
-const SESSION_DIR = join(homedir(), ".domain-sniper", "sessions");
+import { SESSION_DIR } from "../paths.js";
 
 export interface SavedSession {
   id: string;

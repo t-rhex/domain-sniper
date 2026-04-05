@@ -1,10 +1,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { isValidDomain } from "../validate.js";
 import type { WhoisResult } from "../whois.js";
+import { WHOIS_HISTORY_DIR } from "../paths.js";
 
-const HISTORY_DIR = join(homedir(), ".domain-sniper", "whois-history");
+const HISTORY_DIR = WHOIS_HISTORY_DIR;
 
 function ensureDir(domain: string): string {
   const dir = join(HISTORY_DIR, domain.replace(/[^a-z0-9.-]/gi, "_"));

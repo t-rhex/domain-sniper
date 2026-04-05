@@ -1,10 +1,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
 import { isValidDomain } from "../validate.js";
+import { APP_DIR, PORTFOLIO_FILE } from "../paths.js";
 
-const PORTFOLIO_DIR = join(homedir(), ".domain-sniper");
-const PORTFOLIO_FILE = join(PORTFOLIO_DIR, "portfolio.json");
+const PORTFOLIO_DIR = APP_DIR;
 
 export interface PortfolioDomain {
   domain: string;

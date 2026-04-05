@@ -43,7 +43,7 @@ const program = new Command();
 program
   .name("domain-sniper")
   .description("Check domain availability, detect expired domains, and auto-register them")
-  .version("1.0.0")
+  .version("2.0.0")
   .argument("[domains...]", "Domain(s) to check")
   .option("-f, --file <path>", "Path to file with domains (one per line)")
   .option("-a, --auto-register", "Automatically register available domains", false)
@@ -304,9 +304,10 @@ program
 
 program
   .command("recon <domain>")
-  .description("Full security reconnaissance scan on a domain")
+  .description("Full security reconnaissance scan — ports, headers, email security, WAF, paths, CORS, certificates, and more")
   .option("--json", "Output as JSON")
   .action(async (domain: string, opts: { json?: boolean }) => {
+    await checkDependencies();
     const { whoisLookup, verifyAvailability } = await import("./whois.js");
 
     if (!opts.json) {
@@ -603,7 +604,28 @@ interface JsonOutput {
 
 // ─── Headless / non-interactive mode ──────────────────────
 
+async function checkDependencies(): Promise<void> {
+  const { execFile } = await import("child_process");
+  const { promisify } = await import("util");
+  const execFileAsync = promisify(execFile);
+
+  const missing: string[] = [];
+  try { await execFileAsync("which", ["whois"]); } catch { missing.push("whois"); }
+  try { await execFileAsync("which", ["dig"]); } catch { missing.push("dig"); }
+
+  if (missing.length > 0) {
+    console.error(`Missing required tools: ${missing.join(", ")}`);
+    console.error("Install them:");
+    console.error("  macOS: brew install whois bind (for dig)");
+    console.error("  Ubuntu/Debian: apt install whois dnsutils");
+    console.error("  Alpine: apk add whois bind-tools");
+    process.exit(1);
+  }
+}
+
 async function runHeadless(domains: string[], options: CliOptions) {
+  await checkDependencies();
+
   const { whoisLookup, verifyAvailability, parseDomainList } = await import("./whois.js");
   const { loadConfigFromEnv, checkAvailabilityViaRegistrar, registerDomain } = await import("./registrar.js");
   const { readFileSync, existsSync } = await import("fs");
@@ -621,10 +643,15 @@ async function runHeadless(domains: string[], options: CliOptions) {
     domainList.push(...parseDomainList(content));
   }
 
+  const rawCount = domainList.length;
   domainList = sanitizeDomainList(domainList);
 
   if (domainList.length === 0) {
-    console.error("No domains specified. Use: domain-sniper example.com or -f domains.txt");
+    if (rawCount > 0) {
+      console.error(`No valid domains found (${rawCount} input(s) rejected). Domains must be like: example.com`);
+    } else {
+      console.error("No domains specified. Use: domain-sniper example.com or -f domains.txt");
+    }
     process.exit(1);
   }
 
@@ -638,7 +665,8 @@ async function runHeadless(domains: string[], options: CliOptions) {
     console.log(`\n🔍 Domain Sniper - Checking ${domainList.length} domain(s)...\n`);
   }
 
-  for (const domain of domainList) {
+  for (let i = 0; i < domainList.length; i++) {
+    const domain = domainList[i]!;
     if (!isJsonMode) {
       process.stdout.write(`  Checking ${domain}...`);
     }
@@ -911,10 +939,15 @@ async function runHeadless(domains: string[], options: CliOptions) {
       }
 
       console.log();
+
+      // Visual separator between multi-domain results
+      if (i < domainList.length - 1) {
+        console.log("  ───────────────────────────────────");
+      }
     }
 
     // Rate limit between lookups
-    if (domainList.indexOf(domain) < domainList.length - 1) {
+    if (i < domainList.length - 1) {
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
@@ -926,6 +959,9 @@ async function runHeadless(domains: string[], options: CliOptions) {
       results: jsonResults,
     };
     console.log(JSON.stringify(output, null, 2));
+    // Exit with error code if any domain had an error status
+    const hasErrors = jsonResults.some((r) => r.status === "error");
+    if (hasErrors) process.exitCode = 1;
   } else {
     console.log("Done!\n");
   }
