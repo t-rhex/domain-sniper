@@ -63,6 +63,74 @@ function unauthorized(): Response {
   return json({ error: "Unauthorized" }, 401);
 }
 
+// ─── Rate Limiter ────────────────────────────────────────
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const rateLimits = new Map<string, RateLimitEntry>();
+
+// Clean up expired entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimits) {
+    if (entry.resetAt < now) rateLimits.delete(key);
+  }
+}, 300000);
+
+interface RateLimitConfig {
+  windowMs: number;
+  maxRequests: number;
+}
+
+const RATE_LIMITS: Record<string, RateLimitConfig> = {
+  // Auth: strict — prevent brute force
+  "auth": { windowMs: 900000, maxRequests: 10 },        // 10 attempts per 15 min
+  // Writes: moderate — prevent spam
+  "write": { windowMs: 60000, maxRequests: 20 },         // 20 writes per minute
+  // Reads: generous — allow browsing
+  "read": { windowMs: 60000, maxRequests: 100 },         // 100 reads per minute
+  // Global fallback
+  "global": { windowMs: 60000, maxRequests: 200 },       // 200 total per minute
+};
+
+function getClientIp(req: Request): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || req.headers.get("x-real-ip")
+    || "unknown";
+}
+
+function checkRateLimit(ip: string, bucket: string): { allowed: boolean; remaining: number; resetIn: number } {
+  const config = RATE_LIMITS[bucket] || RATE_LIMITS["global"]!;
+  const key = `${ip}:${bucket}`;
+  const now = Date.now();
+
+  let entry = rateLimits.get(key);
+  if (!entry || entry.resetAt < now) {
+    entry = { count: 0, resetAt: now + config.windowMs };
+    rateLimits.set(key, entry);
+  }
+
+  entry.count++;
+  const remaining = Math.max(0, config.maxRequests - entry.count);
+  const resetIn = Math.ceil((entry.resetAt - now) / 1000);
+
+  return { allowed: entry.count <= config.maxRequests, remaining, resetIn };
+}
+
+function rateLimited(resetIn: number): Response {
+  return new Response(JSON.stringify({ error: "Too many requests. Try again later." }), {
+    status: 429,
+    headers: {
+      "Content-Type": "application/json",
+      "Retry-After": String(resetIn),
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
 // ─── Server ──────────────────────────────────────────────
 
 Bun.serve({
@@ -82,8 +150,24 @@ Bun.serve({
       });
     }
 
+    // ─── Rate limiting ─────────────────────────────────
+    const clientIp = getClientIp(req);
+
+    // Determine bucket
+    const isAuthRoute = url.pathname.startsWith("/api/auth");
+    const isWriteRoute = method === "POST" || method === "PUT" || method === "DELETE";
+    const bucket = isAuthRoute ? "auth" : isWriteRoute ? "write" : "read";
+
+    // Check global limit first
+    const globalCheck = checkRateLimit(clientIp, "global");
+    if (!globalCheck.allowed) return rateLimited(globalCheck.resetIn);
+
+    // Check bucket-specific limit
+    const bucketCheck = checkRateLimit(clientIp, bucket);
+    if (!bucketCheck.allowed) return rateLimited(bucketCheck.resetIn);
+
     // Better Auth routes
-    if (url.pathname.startsWith("/api/auth")) {
+    if (isAuthRoute) {
       return auth.handler(req);
     }
 
