@@ -140,41 +140,274 @@ program
 
 program
   .command("portfolio")
-  .description("View and manage your domain portfolio")
+  .description("Manage your domain portfolio")
   .option("--add <domain>", "Add a domain to portfolio")
   .option("--remove <domain>", "Remove a domain from portfolio")
+  .option("--status <domain:status>", "Set domain status (active|parked|for-sale|development|archived)")
+  .option("--category <domain:category>", "Set domain category")
+  .option("--value <domain:amount>", "Set estimated value")
+  .option("--transaction <domain:type:amount>", "Record transaction (purchase|renewal|sale|parking-revenue|affiliate-revenue|expense)")
   .option("--expiring [days]", "Show domains expiring within N days")
+  .option("--renewals", "Show renewal calendar")
+  .option("--health", "Run health check on all portfolio domains")
+  .option("--pnl [domain]", "Show P&L (for specific domain or total)")
+  .option("--monthly [months]", "Show monthly financial report")
+  .option("--pipeline", "Show acquisition pipeline")
+  .option("--pipeline-add <domain>", "Add domain to acquisition pipeline")
+  .option("--alerts", "Show unacknowledged alerts")
+  .option("--dismiss-alerts", "Dismiss all alerts")
+  .option("--categories", "List categories")
+  .option("--export-csv <path>", "Export portfolio to CSV")
+  .option("--export-tax <year>", "Export tax data for year")
+  .option("--export-transactions <path>", "Export transactions to CSV")
+  .option("--dashboard", "Show portfolio dashboard summary")
   .option("--stats", "Show portfolio statistics")
   .option("--json", "Output as JSON")
-  .action(async (opts: { add?: string; remove?: string; expiring?: string; stats?: boolean; json?: boolean }) => {
-    const { loadPortfolio, addToPortfolio, removeFromPortfolio, getExpiringDomains, getPortfolioStats } = await import("./features/portfolio.js");
-
+  .action(async (opts: {
+    add?: string; remove?: string; status?: string; category?: string; value?: string;
+    transaction?: string; expiring?: string; renewals?: boolean; health?: boolean;
+    pnl?: string | boolean; monthly?: string | boolean; pipeline?: boolean; pipelineAdd?: string;
+    alerts?: boolean; dismissAlerts?: boolean; categories?: boolean;
+    exportCsv?: string; exportTax?: string; exportTransactions?: string;
+    dashboard?: boolean; stats?: boolean; json?: boolean;
+  }) => {
     if (opts.add) {
+      const { addToPortfolio } = await import("./features/portfolio.js");
       addToPortfolio(opts.add);
       console.log(`Added ${opts.add} to portfolio`);
       return;
     }
 
     if (opts.remove) {
+      const { removeFromPortfolio } = await import("./features/portfolio.js");
       removeFromPortfolio(opts.remove);
       console.log(`Removed ${opts.remove} from portfolio`);
       return;
     }
 
+    if (opts.status) {
+      const [domain, status] = opts.status.split(":");
+      if (!domain || !status) { console.error("Usage: --status domain.com:active"); process.exit(1); }
+      const { updatePortfolioStatus } = await import("./db.js");
+      updatePortfolioStatus(domain, status as any);
+      console.log(`Set ${domain} status to ${status}`);
+      return;
+    }
+
+    if (opts.category) {
+      const [domain, category] = opts.category.split(":");
+      if (!domain || !category) { console.error("Usage: --category domain.com:investments"); process.exit(1); }
+      const { updatePortfolioCategory } = await import("./db.js");
+      updatePortfolioCategory(domain, category);
+      console.log(`Set ${domain} category to ${category}`);
+      return;
+    }
+
+    if (opts.value) {
+      const [domain, amountStr] = opts.value.split(":");
+      if (!domain || !amountStr) { console.error("Usage: --value domain.com:5000"); process.exit(1); }
+      const { updatePortfolioValue } = await import("./db.js");
+      updatePortfolioValue(domain, parseFloat(amountStr));
+      console.log(`Set ${domain} estimated value to $${amountStr}`);
+      return;
+    }
+
+    if (opts.transaction) {
+      const parts = opts.transaction.split(":");
+      if (parts.length < 3) { console.error("Usage: --transaction domain.com:purchase:9.99"); process.exit(1); }
+      const [domain, type, amountStr] = parts;
+      const { addTransaction } = await import("./db.js");
+      addTransaction(domain!, type as any, parseFloat(amountStr!));
+      console.log(`Recorded ${type} of $${amountStr} for ${domain}`);
+      return;
+    }
+
     if (opts.expiring !== undefined) {
-      const days = parseInt(opts.expiring || "30", 10) || 30;
-      const expiring = getExpiringDomains(days);
-      if (opts.json) { console.log(JSON.stringify(expiring, null, 2)); return; }
+      const { getPortfolioExpiring, closeDb } = await import("./db.js");
+      const days = parseInt(String(opts.expiring) || "30", 10) || 30;
+      const expiring = getPortfolioExpiring(days);
+      if (opts.json) { console.log(JSON.stringify(expiring, null, 2)); closeDb(); return; }
       console.log(`\nDomains expiring within ${days} days:\n`);
       if (expiring.length === 0) { console.log("  None"); }
-      for (const d of expiring) { console.log(`  ${d.domain}  ${d.expiryDate}  ${d.registrar}`); }
+      for (const d of expiring) { console.log(`  ${d.domain}  ${d.expiry_date}  ${d.registrar}`); }
+      console.log();
+      closeDb();
+      return;
+    }
+
+    if (opts.renewals) {
+      const { generateRenewalCalendar, estimateAnnualRenewalCost } = await import("./features/portfolio-monitor.js");
+      const calendar = generateRenewalCalendar(12);
+      const annualCost = estimateAnnualRenewalCost();
+      if (opts.json) { console.log(JSON.stringify({ calendar, annualCost }, null, 2)); return; }
+      console.log(`\nRenewal Calendar (est. annual cost: $${annualCost.toFixed(0)}):\n`);
+      if (calendar.length === 0) { console.log("  No upcoming renewals."); }
+      for (const r of calendar) {
+        const urgency = r.daysLeft <= 7 ? "!!" : r.daysLeft <= 30 ? "! " : "  ";
+        console.log(`  ${urgency} ${r.domain.padEnd(30)} ${String(r.daysLeft).padStart(4)}d  $${r.renewalPrice}${r.autoRenew ? "  (auto-renew)" : ""}`);
+      }
+      console.log();
+      return;
+    }
+
+    if (opts.health) {
+      const { runPortfolioHealthCheck } = await import("./features/portfolio-monitor.js");
+      console.log("\nRunning portfolio health check...\n");
+      const report = await runPortfolioHealthCheck((domain, i, total) => {
+        process.stdout.write(`\r  Checking ${i + 1}/${total}: ${domain}...`);
+      });
+      console.log("\r" + " ".repeat(60) + "\r");
+      if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
+      console.log(`Health Check Results:`);
+      console.log(`  Checked: ${report.checked}`);
+      console.log(`  Healthy: ${report.healthy}`);
+      console.log(`  Warnings: ${report.warnings}`);
+      console.log(`  Critical: ${report.critical}`);
+      if (report.alerts.length > 0) {
+        console.log(`\nAlerts:`);
+        for (const a of report.alerts) {
+          const icon = a.severity === "critical" ? "!!" : a.severity === "warning" ? "! " : "  ";
+          console.log(`  ${icon} ${a.domain}: ${a.message}`);
+        }
+      }
+      console.log();
+      return;
+    }
+
+    if (opts.pnl !== undefined) {
+      const { getDomainPnL, getPortfolioPnL } = await import("./db.js");
+      if (typeof opts.pnl === "string") {
+        const pnl = getDomainPnL(opts.pnl);
+        if (opts.json) { console.log(JSON.stringify(pnl, null, 2)); return; }
+        console.log(`\nP&L for ${opts.pnl}:`);
+        console.log(`  Costs:   $${pnl.costs.toFixed(2)}`);
+        console.log(`  Revenue: $${pnl.revenue.toFixed(2)}`);
+        console.log(`  Profit:  $${pnl.profit.toFixed(2)}\n`);
+      } else {
+        const pnl = getPortfolioPnL();
+        if (opts.json) { console.log(JSON.stringify(pnl, null, 2)); return; }
+        console.log(`\nPortfolio P&L:`);
+        console.log(`  Total Costs:   $${pnl.totalCosts.toFixed(2)}`);
+        console.log(`  Total Revenue: $${pnl.totalRevenue.toFixed(2)}`);
+        console.log(`  Total Profit:  $${pnl.totalProfit.toFixed(2)}`);
+        console.log(`  Domains:       ${pnl.domainCount}\n`);
+      }
+      return;
+    }
+
+    if (opts.monthly !== undefined) {
+      const { getMonthlyReport } = await import("./db.js");
+      const months = typeof opts.monthly === "string" ? parseInt(opts.monthly, 10) : 12;
+      const report = getMonthlyReport(months);
+      if (opts.json) { console.log(JSON.stringify(report, null, 2)); return; }
+      console.log(`\nMonthly Report (${months} months):\n`);
+      console.log(`  ${"Month".padEnd(10)} ${"Costs".padEnd(12)} ${"Revenue".padEnd(12)} ${"Profit".padEnd(12)}`);
+      console.log(`  ${"─".repeat(10)} ${"─".repeat(12)} ${"─".repeat(12)} ${"─".repeat(12)}`);
+      for (const m of report) {
+        console.log(`  ${m.month.padEnd(10)} $${m.costs.toFixed(2).padStart(10)}  $${m.revenue.toFixed(2).padStart(10)}  $${m.profit.toFixed(2).padStart(10)}`);
+      }
+      console.log();
+      return;
+    }
+
+    if (opts.pipeline) {
+      const { getPipeline } = await import("./db.js");
+      const pipeline = getPipeline();
+      if (opts.json) { console.log(JSON.stringify(pipeline, null, 2)); return; }
+      console.log(`\nAcquisition Pipeline (${pipeline.length} domains):\n`);
+      if (pipeline.length === 0) { console.log("  Empty. Use --pipeline-add <domain> to add."); }
+      for (const p of pipeline) {
+        console.log(`  ${p.domain.padEnd(30)} ${p.status.padEnd(14)} ${p.priority}${p.max_bid ? `  max: $${p.max_bid}` : ""}${p.notes ? `  ${p.notes}` : ""}`);
+      }
+      console.log();
+      return;
+    }
+
+    if (opts.pipelineAdd) {
+      const { addToPipeline } = await import("./db.js");
+      addToPipeline(opts.pipelineAdd);
+      console.log(`Added ${opts.pipelineAdd} to acquisition pipeline`);
+      return;
+    }
+
+    if (opts.alerts) {
+      const { getUnacknowledgedAlerts } = await import("./db.js");
+      const alerts = getUnacknowledgedAlerts();
+      if (opts.json) { console.log(JSON.stringify(alerts, null, 2)); return; }
+      console.log(`\nAlerts (${alerts.length} unacknowledged):\n`);
+      if (alerts.length === 0) { console.log("  No alerts."); }
+      for (const a of alerts) {
+        const icon = a.severity === "critical" ? "!!" : a.severity === "warning" ? "! " : "  ";
+        console.log(`  ${icon} [${a.severity}] ${a.domain}: ${a.message}  (${a.created_at})`);
+      }
+      console.log();
+      return;
+    }
+
+    if (opts.dismissAlerts) {
+      const { acknowledgeAllAlerts } = await import("./db.js");
+      acknowledgeAllAlerts();
+      console.log("All alerts dismissed");
+      return;
+    }
+
+    if (opts.categories) {
+      const { getCategories } = await import("./db.js");
+      const categories = getCategories();
+      if (opts.json) { console.log(JSON.stringify(categories, null, 2)); return; }
+      console.log(`\nCategories:\n`);
+      for (const c of categories) {
+        console.log(`  ${c.name.padEnd(20)} ${c.count} domain(s)${c.description ? `  — ${c.description}` : ""}`);
+      }
+      console.log();
+      return;
+    }
+
+    if (opts.exportCsv) {
+      const { exportPortfolioCSV } = await import("./features/portfolio-bulk.js");
+      const path = exportPortfolioCSV(opts.exportCsv);
+      console.log(`Portfolio exported to ${path}`);
+      return;
+    }
+
+    if (opts.exportTax) {
+      const year = parseInt(opts.exportTax, 10);
+      if (isNaN(year)) { console.error("Usage: --export-tax 2025"); process.exit(1); }
+      const { exportTaxCSV } = await import("./features/portfolio-bulk.js");
+      const path = exportTaxCSV(`tax-${year}.csv`, year);
+      console.log(`Tax data for ${year} exported to ${path}`);
+      return;
+    }
+
+    if (opts.exportTransactions) {
+      const { exportTransactionsCSV } = await import("./features/portfolio-bulk.js");
+      const path = exportTransactionsCSV(opts.exportTransactions);
+      console.log(`Transactions exported to ${path}`);
+      return;
+    }
+
+    if (opts.dashboard) {
+      const { getPortfolioDashboard, getTotalPortfolioValue } = await import("./db.js");
+      const { estimateAnnualRenewalCost } = await import("./features/portfolio-monitor.js");
+      const dash = getPortfolioDashboard();
+      const annualCost = estimateAnnualRenewalCost();
+      if (opts.json) { console.log(JSON.stringify(dash, null, 2)); return; }
+      console.log(`\n◆ Portfolio Dashboard`);
+      console.log(`  Domains: ${dash.totalDomains}  |  Value: $${dash.totalValue.toFixed(0)}  |  Annual cost: ~$${annualCost.toFixed(0)}`);
+      console.log(`  P&L: -$${dash.totalCosts.toFixed(0)} costs + $${dash.totalRevenue.toFixed(0)} revenue = $${dash.totalProfit.toFixed(0)} profit`);
+      console.log(`  Expiring: ${dash.expiringIn30} in 30d, ${dash.expiringIn90} in 90d`);
+      console.log(`  Alerts: ${dash.activeAlerts}  |  Pipeline: ${dash.pipelineCount}`);
+      if (Object.keys(dash.byStatus).length > 0) {
+        console.log(`  Status: ${Object.entries(dash.byStatus).map(([s, c]) => `${s}(${c})`).join(" ")}`);
+      }
       console.log();
       return;
     }
 
     if (opts.stats) {
-      const stats = getPortfolioStats();
-      if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
+      const { getPortfolioStatsDb, closeDb } = await import("./db.js");
+      const stats = getPortfolioStatsDb();
+      if (opts.json) { console.log(JSON.stringify(stats, null, 2)); closeDb(); return; }
       console.log(`\nPortfolio Stats:`);
       console.log(`  Domains: ${stats.total}`);
       console.log(`  Total spent: $${stats.totalSpent}`);
@@ -187,18 +420,21 @@ program
         }
       }
       console.log();
+      closeDb();
       return;
     }
 
-    // Default: list all
-    const portfolio = loadPortfolio();
-    if (opts.json) { console.log(JSON.stringify(portfolio, null, 2)); return; }
-    console.log(`\nDomain Portfolio (${portfolio.domains.length} domains, $${portfolio.totalSpent} spent):\n`);
-    if (portfolio.domains.length === 0) { console.log("  Empty. Use --add <domain> to add domains."); }
-    for (const d of portfolio.domains) {
-      console.log(`  ${d.domain}  ${d.registrar}  ${d.expiryDate || "no expiry"}  $${d.purchasePrice}`);
+    // Default: list all portfolio domains
+    const { getPortfolioDomains, closeDb } = await import("./db.js");
+    const domains = getPortfolioDomains();
+    if (opts.json) { console.log(JSON.stringify(domains, null, 2)); closeDb(); return; }
+    console.log(`\nDomain Portfolio (${domains.length} domains):\n`);
+    if (domains.length === 0) { console.log("  Empty. Use --add <domain> to add domains."); }
+    for (const d of domains) {
+      console.log(`  ${d.domain.padEnd(30)} ${(d as any).status?.padEnd(12) || "active".padEnd(12)} ${d.registrar.padEnd(16)} ${d.expiry_date || "no expiry"}  $${d.purchase_price}`);
     }
     console.log();
+    closeDb();
   });
 
 // ─── Config subcommand ───────────────────────────────────
