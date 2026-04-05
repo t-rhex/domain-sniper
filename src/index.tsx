@@ -873,7 +873,15 @@ program
   .option("--port <port>", "Port number", "3000")
   .action(async (opts: { port: string }) => {
     process.env.MARKET_PORT = opts.port;
-    await import("../marketplace/index.js");
+    const marketPath = "../marketplace/index.js";
+    try {
+      await import(/* @vite-ignore */ marketPath);
+    } catch {
+      console.error("Marketplace server not found. Clone the private marketplace repo:");
+      console.error("  git clone https://github.com/t-rhex/domain-sniper-marketplace marketplace/");
+      console.error("  bun run serve");
+      process.exit(1);
+    }
   });
 
 // ─── Market subcommand ─────────────────────────────────
