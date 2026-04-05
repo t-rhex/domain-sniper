@@ -13,6 +13,30 @@ import { checkSocialMedia } from "./features/social-check.js";
 import { detectTechStack } from "./features/tech-stack.js";
 import { checkBlacklists } from "./features/blacklist-check.js";
 import { estimateBacklinks } from "./features/backlinks.js";
+import { scanPorts } from "./features/port-scanner.js";
+import { reverseIpLookup } from "./features/reverse-ip.js";
+import { lookupAsn } from "./features/asn-lookup.js";
+import { checkEmailSecurity } from "./features/email-security.js";
+import { checkZoneTransfer } from "./features/zone-transfer.js";
+import { queryCertTransparency } from "./features/cert-transparency.js";
+import { detectTakeover } from "./features/takeover-detect.js";
+import { auditSecurityHeaders } from "./features/security-headers.js";
+import { detectWaf } from "./features/waf-detect.js";
+import { scanPaths } from "./features/path-scanner.js";
+import { checkCors } from "./features/cors-check.js";
+import { rdapLookup } from "./features/rdap.js";
+import { checkSsl } from "./features/ssl-check.js";
+import type { PortScanResult } from "./features/port-scanner.js";
+import type { ReverseIpResult } from "./features/reverse-ip.js";
+import type { AsnResult } from "./features/asn-lookup.js";
+import type { EmailSecurityResult } from "./features/email-security.js";
+import type { ZoneTransferResult } from "./features/zone-transfer.js";
+import type { CertTransparencyResult } from "./features/cert-transparency.js";
+import type { TakeoverResult } from "./features/takeover-detect.js";
+import type { SecurityHeadersResult } from "./features/security-headers.js";
+import type { WafResult } from "./features/waf-detect.js";
+import type { PathScanResult } from "./features/path-scanner.js";
+import type { CorsResult } from "./features/cors-check.js";
 
 const program = new Command();
 
@@ -26,6 +50,7 @@ program
   .option("--headless", "Run in non-interactive mode (print results to stdout)", false)
   .option("--json", "Output results as JSON", false)
   .option("-c, --concurrency <n>", "Concurrent lookups (default: 5)", "5")
+  .option("--recon", "Enable full recon mode in headless scanning", false)
   .action(async (domains: string[], options: CliOptions) => {
     // Stdin pipe support: read from stdin when no TTY and no domains/file provided
     if (!process.stdin.isTTY && domains.length === 0 && !options.file) {
@@ -275,6 +300,257 @@ program
     await catcher.start();
   });
 
+// ─── Recon subcommand ──────────────────────────────────
+
+program
+  .command("recon <domain>")
+  .description("Full security reconnaissance scan on a domain")
+  .option("--json", "Output as JSON")
+  .action(async (domain: string, opts: { json?: boolean }) => {
+    const { whoisLookup, verifyAvailability } = await import("./whois.js");
+
+    if (!opts.json) {
+      console.log(`\n\x1b[1m=== RECON: ${domain} ===\x1b[0m\n`);
+    }
+
+    const results = await Promise.allSettled([
+      whoisLookup(domain),
+      lookupDns(domain),
+      httpProbe(domain),
+      checkWayback(domain),
+      rdapLookup(domain),
+      checkSsl(domain),
+      checkSocialMedia(domain),
+      detectTechStack(domain),
+      checkBlacklists(domain),
+      estimateBacklinks(domain),
+      scanPorts(domain),
+      reverseIpLookup(domain),
+      lookupAsn(domain),
+      checkEmailSecurity(domain),
+      checkZoneTransfer(domain),
+      queryCertTransparency(domain),
+      detectTakeover(domain),
+      auditSecurityHeaders(domain),
+      detectWaf(domain),
+      scanPaths(domain),
+      checkCors(domain),
+    ]);
+
+    const val = <T,>(r: PromiseSettledResult<T>): T | null =>
+      r.status === "fulfilled" ? r.value : null;
+
+    const whois = val(results[0]!);
+    const dns = val(results[1]!);
+    const http = val(results[2]!);
+    const wayback = val(results[3]!);
+    const rdap = val(results[4]!);
+    const ssl = val(results[5]!);
+    const social = val(results[6]!);
+    const tech = val(results[7]!);
+    const blacklist = val(results[8]!);
+    const backlinks = val(results[9]!);
+    const ports = val(results[10]!) as PortScanResult | null;
+    const reverseIp = val(results[11]!) as ReverseIpResult | null;
+    const asn = val(results[12]!) as AsnResult | null;
+    const emailSec = val(results[13]!) as EmailSecurityResult | null;
+    const zoneXfer = val(results[14]!) as ZoneTransferResult | null;
+    const certs = val(results[15]!) as CertTransparencyResult | null;
+    const takeover = val(results[16]!) as TakeoverResult | null;
+    const secHeaders = val(results[17]!) as SecurityHeadersResult | null;
+    const waf = val(results[18]!) as WafResult | null;
+    const paths = val(results[19]!) as PathScanResult | null;
+    const cors = val(results[20]!) as CorsResult | null;
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        domain,
+        timestamp: new Date().toISOString(),
+        whois, dns, http, wayback, rdap, ssl, social, tech, blacklist, backlinks,
+        ports, reverseIp, asn, emailSecurity: emailSec, zoneTransfer: zoneXfer,
+        certTransparency: certs, takeover, securityHeaders: secHeaders, waf,
+        pathScan: paths, cors,
+      }, null, 2));
+      return;
+    }
+
+    // --- Text output ---
+    const g = "\x1b[32m", r = "\x1b[31m", y = "\x1b[33m", c = "\x1b[36m";
+    const b = "\x1b[1m", d = "\x1b[2m", x = "\x1b[0m";
+
+    // WHOIS
+    if (whois) {
+      console.log(`${b}WHOIS${x}`);
+      if (whois.available) console.log(`  ${g}AVAILABLE${x}`);
+      else if (whois.expired) console.log(`  ${y}EXPIRED${x}`);
+      else console.log(`  ${r}TAKEN${x}`);
+      if (whois.registrar) console.log(`  Registrar:  ${whois.registrar}`);
+      if (whois.createdDate) console.log(`  Created:    ${whois.createdDate}`);
+      if (whois.expiryDate) console.log(`  Expires:    ${whois.expiryDate}`);
+      const age = calculateDomainAge(whois.createdDate);
+      if (age) console.log(`  Age:        ${age}`);
+      console.log();
+    }
+
+    // DNS
+    if (dns) {
+      console.log(`${b}DNS RECORDS${x}`);
+      if (dns.a.length) console.log(`  A:     ${dns.a.join(", ")}`);
+      if (dns.aaaa.length) console.log(`  AAAA:  ${dns.aaaa.join(", ")}`);
+      if (dns.mx.length) console.log(`  MX:    ${dns.mx.join(", ")}`);
+      if (dns.txt.length) console.log(`  TXT:   ${dns.txt.slice(0, 3).join(", ")}`);
+      if (dns.cname.length) console.log(`  CNAME: ${dns.cname.join(", ")}`);
+      console.log();
+    }
+
+    // ASN / Network
+    if (asn && !asn.error) {
+      console.log(`${b}NETWORK${x}`);
+      if (asn.asn) console.log(`  ASN:       ${asn.asn}${asn.asnName ? ` (${asn.asnName})` : ""}`);
+      if (asn.org) console.log(`  Org:       ${asn.org}`);
+      if (asn.country) console.log(`  Location:  ${asn.city || ""}${asn.city && asn.country ? ", " : ""}${asn.country}`);
+      if (asn.isp) console.log(`  ISP:       ${asn.isp}`);
+      console.log();
+    }
+
+    // Port scan
+    if (ports && ports.openPorts.length > 0) {
+      console.log(`${b}${r}OPEN PORTS (${ports.openPorts.length})${x}`);
+      for (const p of ports.openPorts.slice(0, 20)) {
+        console.log(`  ${y}${String(p.port).padEnd(6)}${x} ${p.service.padEnd(14)} ${d}${p.banner || ""}${x}`);
+      }
+      if (ports.ip) console.log(`  ${d}IP: ${ports.ip} (${ports.scanTime}ms)${x}`);
+      console.log();
+    }
+
+    // Reverse IP
+    if (reverseIp && reverseIp.sharedDomains.length > 0) {
+      console.log(`${b}SHARED HOSTING (${reverseIp.sharedDomains.length} domains on ${reverseIp.ip})${x}`);
+      for (const dd of reverseIp.sharedDomains.slice(0, 10)) console.log(`  ${dd}`);
+      if (reverseIp.sharedDomains.length > 10) console.log(`  ${d}+${reverseIp.sharedDomains.length - 10} more${x}`);
+      console.log();
+    }
+
+    // SSL
+    if (ssl && !ssl.error) {
+      console.log(`${b}SSL CERTIFICATE${x}`);
+      console.log(`  Valid:    ${ssl.valid ? `${g}Yes${x}` : `${r}No${x}`}`);
+      if (ssl.issuer) console.log(`  Issuer:   ${ssl.issuer}`);
+      if (ssl.daysUntilExpiry !== null) console.log(`  Expires:  ${ssl.daysUntilExpiry}d`);
+      console.log();
+    }
+
+    // Email Security
+    if (emailSec) {
+      const ec = emailSec.grade <= "B" ? g : r;
+      console.log(`${b}EMAIL SECURITY (${ec}${emailSec.grade}${x}${b})${x}`);
+      console.log(`  SPF:   ${emailSec.spf.found ? `${g}Found${x}` : `${r}Missing${x}`}`);
+      console.log(`  DKIM:  ${emailSec.dkim.found ? `${g}Found (${emailSec.dkim.selector})${x}` : `${r}Missing${x}`}`);
+      console.log(`  DMARC: ${emailSec.dmarc.found ? `${g}p=${emailSec.dmarc.policy || "?"}${x}` : `${r}Missing${x}`}`);
+      for (const issue of emailSec.issues.slice(0, 5)) console.log(`  ${y}! ${issue}${x}`);
+      console.log();
+    }
+
+    // Security Headers
+    if (secHeaders && !secHeaders.error) {
+      const hc = secHeaders.grade <= "B" ? g : r;
+      console.log(`${b}SECURITY HEADERS (${hc}${secHeaders.grade}${x}${b} — ${secHeaders.score}/100)${x}`);
+      for (const h of secHeaders.missing.slice(0, 6)) console.log(`  ${r}x ${h}${x}`);
+      for (const h of secHeaders.headers.filter((h) => h.status === "good").slice(0, 4)) console.log(`  ${g}+ ${h.name}${x}`);
+      console.log();
+    }
+
+    // WAF
+    if (waf) {
+      console.log(`${b}WAF${x}`);
+      console.log(`  ${waf.detected ? `${c}${waf.waf} (${waf.confidence})${x}` : `${d}None detected${x}`}`);
+      console.log();
+    }
+
+    // Zone Transfer
+    if (zoneXfer && zoneXfer.vulnerable) {
+      console.log(`${b}${r}!! ZONE TRANSFER VULNERABLE${x}`);
+      for (const ns of zoneXfer.vulnerableNs) console.log(`  ${r}${ns}${x}`);
+      console.log();
+    }
+
+    // Cert Transparency
+    if (certs && certs.subdomains.length > 0) {
+      console.log(`${b}CERT TRANSPARENCY (${certs.subdomains.length} subdomains, ${certs.totalCerts} certs)${x}`);
+      for (const s of certs.subdomains.slice(0, 15)) console.log(`  ${s}`);
+      if (certs.subdomains.length > 15) console.log(`  ${d}+${certs.subdomains.length - 15} more${x}`);
+      console.log();
+    }
+
+    // Takeover
+    if (takeover && takeover.vulnerable) {
+      console.log(`${b}${r}!! SUBDOMAIN TAKEOVER${x}`);
+      for (const f of takeover.findings.filter((f) => f.status === "vulnerable")) {
+        console.log(`  ${r}${f.subdomain} -> ${f.service}${x}`);
+      }
+      console.log();
+    }
+
+    // Path Scanner
+    if (paths && paths.findings.length > 0) {
+      console.log(`${b}${r}EXPOSED PATHS (${paths.findings.length})${x}`);
+      for (const f of paths.findings.slice(0, 15)) {
+        const fc = f.severity === "critical" ? r : f.severity === "high" ? y : d;
+        console.log(`  ${fc}${f.severity === "critical" ? "!!" : f.severity === "high" ? "! " : "  "} ${f.path} [${f.status}]${x}`);
+      }
+      console.log();
+    }
+
+    // CORS
+    if (cors && cors.vulnerable) {
+      console.log(`${b}${r}!! CORS MISCONFIGURATION${x}`);
+      for (const f of cors.findings.filter((f) => f.allowed).slice(0, 5)) {
+        console.log(`  ${r}${f.detail}${x}`);
+      }
+      console.log();
+    }
+
+    // Tech Stack
+    if (tech && tech.technologies.length > 0) {
+      console.log(`${b}TECH STACK${x}`);
+      if (tech.cms) console.log(`  CMS:        ${tech.cms}`);
+      if (tech.framework) console.log(`  Framework:  ${tech.framework}`);
+      if (tech.cdn) console.log(`  CDN:        ${tech.cdn}`);
+      console.log();
+    }
+
+    // Blacklist
+    if (blacklist) {
+      if (blacklist.listed) {
+        const names = blacklist.lists.filter((l) => l.listed).map((l) => l.name).join(", ");
+        console.log(`${b}${r}BLACKLISTED: ${names}${x}`);
+      } else {
+        console.log(`${b}REPUTATION${x}: ${g}clean (${blacklist.cleanCount}/${blacklist.lists.length})${x}`);
+      }
+      console.log();
+    }
+
+    // Backlinks
+    if (backlinks) {
+      const parts: string[] = [];
+      if (backlinks.pageRank !== null) parts.push(`PageRank: ${backlinks.pageRank}`);
+      if (backlinks.commonCrawlPages !== null) parts.push(`CC pages: ~${backlinks.commonCrawlPages}`);
+      if (parts.length > 0) console.log(`${b}AUTHORITY${x}: ${parts.join(", ")}`);
+      console.log();
+    }
+
+    // Social
+    if (social) {
+      const avail = social.filter((s) => s.available && !s.error);
+      if (avail.length > 0) {
+        console.log(`${b}SOCIAL AVAILABLE${x}: ${avail.map((s) => s.platform).join(", ")}`);
+        console.log();
+      }
+    }
+
+    console.log(`${d}Scan complete.${x}\n`);
+  });
+
 program.parse();
 
 // ─── Types ───────────────────────────────────────────────
@@ -285,6 +561,7 @@ interface CliOptions {
   headless: boolean;
   json: boolean;
   concurrency: string;
+  recon: boolean;
 }
 
 interface JsonOutputResult {
@@ -305,6 +582,17 @@ interface JsonOutputResult {
   techStack: Awaited<ReturnType<typeof detectTechStack>> | null;
   blacklist: Awaited<ReturnType<typeof checkBlacklists>> | null;
   backlinks: Awaited<ReturnType<typeof estimateBacklinks>> | null;
+  portScan?: PortScanResult | null;
+  reverseIp?: ReverseIpResult | null;
+  asn?: AsnResult | null;
+  emailSecurity?: EmailSecurityResult | null;
+  zoneTransfer?: ZoneTransferResult | null;
+  certTransparency?: CertTransparencyResult | null;
+  takeover?: TakeoverResult | null;
+  securityHeaders?: SecurityHeadersResult | null;
+  waf?: WafResult | null;
+  pathScan?: PathScanResult | null;
+  cors?: CorsResult | null;
 }
 
 interface JsonOutput {
@@ -421,6 +709,50 @@ async function runHeadless(domains: string[], options: CliOptions) {
     let backlinkResult: Awaited<ReturnType<typeof estimateBacklinks>> | null = null;
     try { backlinkResult = await estimateBacklinks(domain); } catch {}
 
+    // Recon features — only when --recon flag is set
+    let reconData: {
+      portScan: PortScanResult | null;
+      reverseIp: ReverseIpResult | null;
+      asn: AsnResult | null;
+      emailSecurity: EmailSecurityResult | null;
+      zoneTransfer: ZoneTransferResult | null;
+      certTransparency: CertTransparencyResult | null;
+      takeover: TakeoverResult | null;
+      securityHeaders: SecurityHeadersResult | null;
+      waf: WafResult | null;
+      pathScan: PathScanResult | null;
+      cors: CorsResult | null;
+    } | null = null;
+
+    if (options.recon) {
+      const [portsR, reverseIpR, asnR, emailSecR, zoneXferR, certsR, takeoverR, secHeadersR, wafR, pathsR, corsR] = await Promise.all([
+        scanPorts(domain).catch(() => null),
+        reverseIpLookup(domain).catch(() => null),
+        lookupAsn(domain).catch(() => null),
+        checkEmailSecurity(domain).catch(() => null),
+        checkZoneTransfer(domain).catch(() => null),
+        queryCertTransparency(domain).catch(() => null),
+        detectTakeover(domain).catch(() => null),
+        auditSecurityHeaders(domain).catch(() => null),
+        detectWaf(domain).catch(() => null),
+        scanPaths(domain).catch(() => null),
+        checkCors(domain).catch(() => null),
+      ]);
+      reconData = {
+        portScan: portsR,
+        reverseIp: reverseIpR,
+        asn: asnR,
+        emailSecurity: emailSecR,
+        zoneTransfer: zoneXferR,
+        certTransparency: certsR,
+        takeover: takeoverR,
+        securityHeaders: secHeadersR,
+        waf: wafR,
+        pathScan: pathsR,
+        cors: corsR,
+      };
+    }
+
     if (isJsonMode) {
       jsonResults.push({
         domain,
@@ -440,6 +772,7 @@ async function runHeadless(domains: string[], options: CliOptions) {
         techStack: techResult,
         blacklist: blacklistResult,
         backlinks: backlinkResult,
+        ...(reconData || {}),
       });
     } else {
       // Normal text output
@@ -514,6 +847,48 @@ async function runHeadless(domains: string[], options: CliOptions) {
         if (backlinkResult.pageRank !== null) parts.push(`PageRank: ${backlinkResult.pageRank}`);
         if (backlinkResult.commonCrawlPages !== null) parts.push(`CC pages: ~${backlinkResult.commonCrawlPages}`);
         if (parts.length > 0) console.log(`    Authority: ${parts.join(", ")}`);
+      }
+
+      // Recon data (if --recon was set)
+      if (reconData) {
+        if (reconData.asn && !reconData.asn.error) {
+          const asnParts: string[] = [];
+          if (reconData.asn.asn) asnParts.push(reconData.asn.asn);
+          if (reconData.asn.org) asnParts.push(reconData.asn.org);
+          if (reconData.asn.country) asnParts.push(reconData.asn.country);
+          if (asnParts.length > 0) console.log(`    Network: ${asnParts.join(" | ")}`);
+        }
+        if (reconData.portScan && reconData.portScan.openPorts.length > 0) {
+          console.log(`    \x1b[31mOpen ports: ${reconData.portScan.openPorts.map((p) => `${p.port}/${p.service}`).join(", ")}\x1b[0m`);
+        }
+        if (reconData.emailSecurity) {
+          console.log(`    Email security: ${reconData.emailSecurity.grade} (SPF:${reconData.emailSecurity.spf.found ? "ok" : "missing"} DKIM:${reconData.emailSecurity.dkim.found ? "ok" : "missing"} DMARC:${reconData.emailSecurity.dmarc.found ? "ok" : "missing"})`);
+        }
+        if (reconData.securityHeaders && !reconData.securityHeaders.error) {
+          console.log(`    Security headers: ${reconData.securityHeaders.grade} (${reconData.securityHeaders.score}/100)`);
+        }
+        if (reconData.waf?.detected) {
+          console.log(`    WAF: ${reconData.waf.waf} (${reconData.waf.confidence})`);
+        }
+        if (reconData.zoneTransfer?.vulnerable) {
+          console.log(`    \x1b[31m!! Zone transfer vulnerable: ${reconData.zoneTransfer.vulnerableNs.join(", ")}\x1b[0m`);
+        }
+        if (reconData.takeover?.vulnerable) {
+          const vulnSubs = reconData.takeover.findings.filter((f) => f.status === "vulnerable");
+          console.log(`    \x1b[31m!! Subdomain takeover: ${vulnSubs.map((f) => f.subdomain).join(", ")}\x1b[0m`);
+        }
+        if (reconData.pathScan && reconData.pathScan.findings.length > 0) {
+          console.log(`    \x1b[31mExposed paths: ${reconData.pathScan.findings.slice(0, 5).map((f) => f.path).join(", ")}\x1b[0m`);
+        }
+        if (reconData.cors?.vulnerable) {
+          console.log(`    \x1b[31m!! CORS misconfiguration\x1b[0m`);
+        }
+        if (reconData.certTransparency && reconData.certTransparency.subdomains.length > 0) {
+          console.log(`    CT subdomains: ${reconData.certTransparency.subdomains.length} found`);
+        }
+        if (reconData.reverseIp && reconData.reverseIp.sharedDomains.length > 0) {
+          console.log(`    Shared hosting: ${reconData.reverseIp.sharedDomains.length} domains on ${reconData.reverseIp.ip}`);
+        }
       }
 
       // Registrar check
