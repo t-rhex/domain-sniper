@@ -1475,6 +1475,39 @@ program
     }
   });
 
+// ─── Update subcommand ──────────────────────────────────
+
+program
+  .command("update")
+  .description("Update domsniper to the latest version")
+  .action(async () => {
+    const { checkForUpdates } = await import("./core/features/version-check.js");
+    const result = await checkForUpdates();
+
+    if (!result.updateAvailable || !result.latest) {
+      console.log(`Already on the latest version (${result.current})`);
+      return;
+    }
+
+    console.log(`Updating: ${result.current} → ${result.latest}`);
+
+    const { execSync } = await import("child_process");
+    try {
+      // Try bun first, then npm
+      try {
+        execSync("bun add -g domsniper@latest", { stdio: "inherit" });
+      } catch {
+        execSync("npm install -g domsniper@latest", { stdio: "inherit" });
+      }
+      console.log(`\nUpdated to domsniper@${result.latest}`);
+    } catch (err: unknown) {
+      console.error("Update failed. Try manually:");
+      console.error("  bun add -g domsniper@latest");
+      console.error("  # or: npm install -g domsniper@latest");
+      process.exit(1);
+    }
+  });
+
 program.parse();
 
 // ─── Types ───────────────────────────────────────────────

@@ -158,15 +158,19 @@ export async function whoisLookup(domain: string): Promise<WhoisResult> {
   assertValidDomain(domain);
   try {
     const { stdout, stderr } = await execFileAsync("whois", [domain], {
-      timeout: 15000,
+      timeout: 20000,
     });
 
     const raw = stdout || stderr || "";
     return parseWhoisResponse(domain, raw);
-  } catch (err: any) {
+  } catch (err: unknown) {
     // whois command may return non-zero but still have useful output
-    if (err.stdout) {
-      return parseWhoisResponse(domain, err.stdout);
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    if (execErr.stdout) {
+      return parseWhoisResponse(domain, execErr.stdout);
+    }
+    if (execErr.stderr) {
+      return parseWhoisResponse(domain, execErr.stderr);
     }
     return {
       domain,
@@ -179,7 +183,7 @@ export async function whoisLookup(domain: string): Promise<WhoisResult> {
       status: [],
       nameServers: [],
       rawText: "",
-      error: err.message || "WHOIS lookup failed",
+      error: execErr.message || "WHOIS lookup failed",
     };
   }
 }

@@ -52,7 +52,7 @@ import { auditSecurityHeaders } from "./core/features/security-headers.js";
 import { detectWaf } from "./core/features/waf-detect.js";
 import { scanPaths } from "./core/features/path-scanner.js";
 import { checkCors } from "./core/features/cors-check.js";
-import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getDomainByName, createSession as dbCreateSession, updateSessionCount, getDbStats, getAllDomains, getPortfolioExpiring } from "./core/db.js";
+import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getLatestScan, getDomainByName, createSession as dbCreateSession, updateSessionCount, getDbStats, getAllDomains, getPortfolioExpiring } from "./core/db.js";
 import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, getSnipeStats, type PortfolioStatus, type TransactionType } from "./core/db.js";
 import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./core/features/portfolio-monitor.js";
 
@@ -575,7 +575,11 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (key === "n" && !ctrl) {
       setReconMode((v) => {
         const newVal = !v;
-        log(newVal ? "Recon mode ON (full pentest — rescan to apply)" : "Recon mode OFF (fast scan)", newVal ? theme.warning : theme.textMuted);
+        if (domains.length > 0) {
+          log(newVal ? "Recon mode ON — press Enter on a domain to rescan with recon" : "Recon mode OFF (fast scan)", newVal ? theme.warning : theme.textMuted);
+        } else {
+          log(newVal ? "Recon mode ON — next scan will include security checks" : "Recon mode OFF (fast scan)", newVal ? theme.warning : theme.textMuted);
+        }
         return newVal;
       });
       return;
@@ -745,6 +749,29 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         log(`Cleared cache for ${selected.domain} (${count} entries)`, theme.info);
       }
 
+      // Rescan selected domain
+      else if (key === "return" && selected && mode !== "scanning" && !showMarket && !showPortfolio) {
+        log(`Rescanning ${selected.domain}...`, theme.info);
+        // Clear cache for this domain first
+        clearCache(selected.domain);
+        // Re-process just this domain
+        const idx = domains.indexOf(selected);
+        if (idx >= 0) {
+          setDomains((prev: DomainEntry[]) => {
+            const u = [...prev];
+            u[idx] = { ...createEmptyEntry(selected.domain), status: "checking" };
+            return u;
+          });
+          processDomain(selected.domain).then((result) => {
+            setDomains((prev: DomainEntry[]) => {
+              const u = [...prev];
+              u[idx] = result;
+              return u;
+            });
+          });
+        }
+      }
+
       // Show scan history for selected domain
       else if (key === "h" && selected) {
         const history = getScanHistory(selected.domain, 5);
@@ -755,6 +782,29 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           }
         } else {
           log(`No scan history for ${selected.domain}`, theme.textMuted);
+        }
+      }
+
+      // Load previous scan result
+      else if (key === "H" && selected) {
+        try {
+          const prevScan = getLatestScan(selected.domain);
+          if (prevScan) {
+            // Replace the current entry with the historical scan
+            const idx = domains.indexOf(selected);
+            if (idx >= 0) {
+              setDomains((prev: DomainEntry[]) => {
+                const u = [...prev];
+                u[idx] = { ...prevScan, tagged: prev[idx]!.tagged };
+                return u;
+              });
+              log(`Loaded last saved scan for ${selected.domain}`, theme.info);
+            }
+          } else {
+            log(`No saved scan history for ${selected.domain}`, theme.textMuted);
+          }
+        } catch {
+          log("Could not load scan history", theme.error);
         }
       }
 
@@ -1322,7 +1372,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  S             Snipe domain (auto-register when it drops)" fg={theme.textSecondary} />
                 <text content="  D             Drop catch (expired only)" fg={theme.textSecondary} />
                 <text content="  c             Clear cache for selected" fg={theme.textSecondary} />
+                <text content="  Enter         Rescan selected domain" fg={theme.textSecondary} />
                 <text content="  h             Show scan history" fg={theme.textSecondary} />
+                <text content="  H             Load previous scan result" fg={theme.textSecondary} />
                 <text content="  w             Watch tagged (1h)" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Filter & Sort" fg={theme.secondary} />
