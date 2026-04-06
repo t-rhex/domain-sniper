@@ -20,7 +20,7 @@ import { scoreDomain, scoreGrade } from "./core/features/scoring.js";
 import { exportToCSV, exportToJSON } from "./core/features/export.js";
 import { DomainWatcher, formatInterval } from "./core/features/watch.js";
 import { saveSession, loadSession, listSessions } from "./core/features/session.js";
-import { filterDomains, nextStatus, nextSort, DEFAULT_FILTER, type FilterConfig, type FilterStatus, type SortField } from "./core/features/filter.js";
+import { filterDomains, nextStatus, DEFAULT_FILTER, type FilterConfig, type FilterStatus, type SortField } from "./core/features/filter.js";
 import { rdapLookup } from "./core/features/rdap.js";
 import { checkSsl } from "./core/features/ssl-check.js";
 import { discoverSubdomains, getActiveSubdomains } from "./core/features/subdomain-discovery.js";
@@ -437,11 +437,11 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (showHelp) return; // Consume all keys while help is shown
 
     // Toggle portfolio dashboard
-    if (key === "P" && mode !== "input") { setShowPortfolio((v) => !v); return; }
+    if (key === "b" && mode !== "input") { setShowPortfolio((v) => !v); return; }
     if (showPortfolio && key === "escape") { setShowPortfolio(false); return; }
 
     // ── Marketplace toggle ──
-    if (key === "M" && mode !== "input") {
+    if (key === "m" && mode !== "input") {
       if (!showMarket) {
         setShowMarket(true);
         setMarketView("browse");
@@ -561,7 +561,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     }
 
     // Cancel bulk register on any other key
-    if (confirmBulkRegister && key !== "R") {
+    if (confirmBulkRegister && key !== "a") {
       setConfirmBulkRegister(false);
     }
 
@@ -602,14 +602,34 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       return;
     }
 
-    // Snipe selected domain (already past input mode guard)
-    if (key === "S" && selected) {
-      if (selected.status === "taken" || selected.status === "expired") {
+    // Snipe selected domain (merged with drop catch for expired domains)
+    if (key === "z" && selected) {
+      if (selected.status === "expired" || selected.whois?.expired) {
+        // Expired domain — start snipe + drop catch
         snipeDomain(selected.domain, {
           expiryDate: selected.whois?.expiryDate || undefined,
         });
-        const phase = selected.status === "expired" ? "frequent" : "hourly";
-        log(`Sniping ${selected.domain} — ${selected.status === "expired" ? "expired, checking every 5 min" : "watching for expiry"}`, theme.warning);
+        log(`Sniping ${selected.domain} — expired, will auto-register when it drops`, theme.warning);
+        log(`Run 'domain-sniper snipe run' to start the engine`, theme.textDisabled);
+        // Also start drop catch if registrar is configured
+        if (registrarConfig?.apiKey) {
+          const catcher = createDropCatcher({
+            domain: selected.domain,
+            registrarConfig: registrarConfig!,
+            pollIntervalMs: 30000,
+            maxAttempts: 2880,
+            onStatus: (status: DropCatchStatus) => log(formatDropCatchStatus(status), status.phase === "success" ? theme.primary : status.phase === "failed" ? theme.error : theme.info),
+            onSuccess: (d: string) => log(`DROP CAUGHT: ${d}!`, theme.primary),
+            onFailed: (d: string, err: string) => log(`Drop catch failed for ${d}: ${err}`, theme.error),
+          });
+          catcher.start();
+          log(`Drop catch started for ${selected.domain} (polling every 30s)`, theme.info);
+        }
+      } else if (selected.status === "taken") {
+        snipeDomain(selected.domain, {
+          expiryDate: selected.whois?.expiryDate || undefined,
+        });
+        log(`Sniping ${selected.domain} — watching for expiry`, theme.info);
         log(`Run 'domain-sniper snipe run' to start the engine`, theme.textDisabled);
       } else if (selected.status === "available") {
         log(`${selected.domain} is already available — press r to register now`, theme.primary);
@@ -639,16 +659,16 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
 
-      // Bulk register tagged (Issue 7: two-step confirmation)
-      else if (key === "R") {
+      // Bulk register tagged (two-step confirmation)
+      else if (key === "a") {
         const tagged = domains.filter((d) => d.tagged && (d.status === "available" || d.status === "expired"));
         if (!registrarConfig?.apiKey) {
           log("No registrar configured", theme.warning);
         } else if (tagged.length === 0) {
-          log("Tag domains with SPACE first, then R to bulk register", theme.warning);
+          log("Tag domains with SPACE first, then a to bulk register", theme.warning);
         } else if (!confirmBulkRegister) {
           setConfirmBulkRegister(true);
-          log(`⚠ CONFIRM: Press R again to register ${tagged.length} domain(s) via ${registrarConfig.provider}`, theme.warning);
+          log(`⚠ CONFIRM: Press a again to register ${tagged.length} domain(s) via ${registrarConfig.provider}`, theme.warning);
           setTimeout(() => setConfirmBulkRegister(false), 5000);
         } else {
           setConfirmBulkRegister(false);
@@ -675,15 +695,21 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         setSelectedIndex(0);
       }
 
-      // Sort: cycle field
+      // Sort: cycle field + order (o cycles: field asc -> field desc -> next field asc -> ...)
       else if (key === "o") {
-        setFilter((f: FilterConfig) => ({ ...f, sort: nextSort(f.sort) }));
+        setFilter((f: FilterConfig) => {
+          const fields: SortField[] = ["domain", "status", "score", "expiry", "price"];
+          const currentIdx = fields.indexOf(f.sort);
+          if (f.order === "asc") {
+            // Switch to desc of same field
+            return { ...f, order: "desc" as const };
+          } else {
+            // Move to next field, reset to asc
+            const nextField = fields[(currentIdx + 1) % fields.length]!;
+            return { ...f, sort: nextField, order: "asc" as const };
+          }
+        });
         setSelectedIndex(0);
-      }
-
-      // Sort: toggle order
-      else if (key === "O") {
-        setFilter((f: FilterConfig) => ({ ...f, order: f.order === "asc" ? "desc" : "asc" }));
       }
 
       // Watch mode
@@ -724,25 +750,6 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           processAllDomains(newSuggestions.map((s) => s.domain), true);
         } else {
           log(`All suggestions for "${name}" already in list`, theme.textMuted);
-        }
-      }
-
-      // Drop catch mode
-      else if (key === "D" && selected && registrarConfig?.apiKey) {
-        if (selected.status === "expired" || selected.whois?.expired) {
-          const catcher = createDropCatcher({
-            domain: selected.domain,
-            registrarConfig: registrarConfig!,
-            pollIntervalMs: 30000,
-            maxAttempts: 2880,
-            onStatus: (status: DropCatchStatus) => log(formatDropCatchStatus(status), status.phase === "success" ? theme.primary : status.phase === "failed" ? theme.error : theme.info),
-            onSuccess: (d: string) => log(`DROP CAUGHT: ${d}!`, theme.primary),
-            onFailed: (d: string, err: string) => log(`Drop catch failed for ${d}: ${err}`, theme.error),
-          });
-          catcher.start();
-          log(`Drop catch started for ${selected.domain} (polling every 30s)`, theme.info);
-        } else {
-          log("Drop catch requires an expired domain", theme.warning);
         }
       }
 
@@ -803,7 +810,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       }
 
       // Load previous scan result
-      else if (key === "H" && selected) {
+      else if (key === "l" && selected) {
         try {
           const prevScan = getLatestScan(selected.domain);
           if (prevScan) {
@@ -1089,7 +1096,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
             )}
             {marketUnread > 0 && <text content={`✉ ${marketUnread}`} fg={theme.warning} />}
             <box flexGrow={1} />
-            <text content="(M to close)" fg={theme.textDisabled} />
+            <text content="(m to close)" fg={theme.textDisabled} />
           </box>
           <text content={hLine(width)} fg={theme.borderSubtle} paddingLeft={1} />
 
@@ -1172,7 +1179,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
               <box backgroundColor={theme.textDisabled}><text content=" ⏎ " fg={theme.background} /></box><text content="view" fg={theme.textMuted} />
               {isLoggedIn() && selected && (<><box backgroundColor={theme.textDisabled}><text content=" l " fg={theme.background} /></box><text content="list domain" fg={theme.textMuted} /></>)}
               <box backgroundColor={theme.textDisabled}><text content=" r " fg={theme.background} /></box><text content="refresh" fg={theme.textMuted} />
-              <box backgroundColor={theme.textDisabled}><text content=" M " fg={theme.background} /></box><text content="close" fg={theme.textMuted} />
+              <box backgroundColor={theme.textDisabled}><text content=" m " fg={theme.background} /></box><text content="close" fg={theme.textMuted} />
             </box>
           </box>
         </box>
@@ -1193,7 +1200,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     <box backgroundColor={theme.primary}><text content=" PORTFOLIO DASHBOARD " fg={theme.background} /></box>
                     <text content={`${dash.totalDomains} domains`} fg={theme.text} />
                     <text content={`$${dash.totalValue.toFixed(0)} value`} fg={theme.primary} />
-                    <text content="(Press P to close)" fg={theme.textDisabled} />
+                    <text content="(Press b to close)" fg={theme.textDisabled} />
                   </box>
 
                   <text content="" />
@@ -1397,21 +1404,19 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="Actions" fg={theme.secondary} />
                 <text content="  SPACE         Tag / untag domain" fg={theme.textSecondary} />
                 <text content="  r             Register selected" fg={theme.textSecondary} />
-                <text content="  R             Bulk register tagged (2x)" fg={theme.textSecondary} />
+                <text content="  a             Bulk register tagged (2x)" fg={theme.textSecondary} />
                 <text content="  d             Suggest similar domains" fg={theme.textSecondary} />
                 <text content="  p             Add to portfolio" fg={theme.textSecondary} />
-                <text content="  S             Snipe domain (auto-register when it drops)" fg={theme.textSecondary} />
-                <text content="  D             Drop catch (expired only)" fg={theme.textSecondary} />
+                <text content="  z             Snipe domain (expired = auto drop catch)" fg={theme.textSecondary} />
                 <text content="  c             Clear cache for selected" fg={theme.textSecondary} />
                 <text content="  Enter         Rescan selected domain" fg={theme.textSecondary} />
                 <text content="  h             Show scan history" fg={theme.textSecondary} />
-                <text content="  H             Load previous scan result" fg={theme.textSecondary} />
+                <text content="  l             Load previous scan result" fg={theme.textSecondary} />
                 <text content="  w             Watch tagged (1h)" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Filter & Sort" fg={theme.secondary} />
                 <text content="  s             Cycle status filter" fg={theme.textSecondary} />
-                <text content="  o             Cycle sort field" fg={theme.textSecondary} />
-                <text content="  O             Toggle sort order" fg={theme.textSecondary} />
+                <text content="  o             Cycle sort field + order" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Recon" fg={theme.secondary} />
                 <text content="  n             Toggle recon mode" fg={theme.textSecondary} />
@@ -1420,7 +1425,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="                (rescan required after toggling)" fg={theme.textDisabled} />
                 <text content="" />
                 <text content="Marketplace" fg={theme.secondary} />
-                <text content="  M             Open/close marketplace" fg={theme.textSecondary} />
+                <text content="  m             Open/close marketplace" fg={theme.textSecondary} />
                 <text content="  /             Search listings (in marketplace)" fg={theme.textSecondary} />
                 <text content="  1 2 3         Switch: Browse / My Listings / My Offers" fg={theme.textSecondary} />
                 <text content="  Enter         View listing details" fg={theme.textSecondary} />
@@ -1429,7 +1434,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  r             Refresh listings" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Portfolio" fg={theme.secondary} />
-                <text content="  P             Portfolio dashboard" fg={theme.textSecondary} />
+                <text content="  b             Portfolio dashboard" fg={theme.textSecondary} />
                 <text content="  p             Add selected to portfolio" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Session" fg={theme.secondary} />
@@ -1488,15 +1493,15 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                       <box paddingLeft={2} paddingTop={0} flexShrink={0}>
                         <text content={
                           selected.status === "available" && registrarConfig?.apiKey
-                            ? "\u2192 Press r to register  |  p to add to portfolio  |  M then l to list for sale"
+                            ? "\u2192 Press r to register  |  p to add to portfolio  |  m then l to list for sale"
                             : selected.status === "available"
-                            ? "\u2192 Press p to add to portfolio  |  M then l to list for sale"
+                            ? "\u2192 Press p to add to portfolio  |  m then l to list for sale"
                             : selected.status === "expired"
-                            ? "\u2192 Press D for drop catch  |  w to watch for availability"
+                            ? "\u2192 Press z to snipe (auto drop catch)  |  w to watch for availability"
                             : selected.status === "taken"
                             ? "\u2192 Press d for alternatives  |  v for variations  |  Tab for more intel"
                             : selected.status === "registered"
-                            ? "\u2192 Press p to add to portfolio  |  M then l to list for sale"
+                            ? "\u2192 Press p to add to portfolio  |  m then l to list for sale"
                             : selected.status === "error"
                             ? "\u2192 Press c to clear cache and rescan"
                             : ""
@@ -2060,8 +2065,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                       <box flexDirection="row" gap={1}><box backgroundColor={theme.primaryDim}><text content=" ? " fg={theme.primary} /></box><text content="help" fg={theme.textSecondary} /></box>
                     </box>
                     <box flexDirection="row" justifyContent="center" gap={3}>
-                      <box flexDirection="row" gap={1}><box backgroundColor={theme.secondaryDim}><text content=" M " fg={theme.secondary} /></box><text content="market" fg={theme.textSecondary} /></box>
-                      <box flexDirection="row" gap={1}><box backgroundColor={theme.secondaryDim}><text content=" P " fg={theme.secondary} /></box><text content="portfolio" fg={theme.textSecondary} /></box>
+                      <box flexDirection="row" gap={1}><box backgroundColor={theme.secondaryDim}><text content=" m " fg={theme.secondary} /></box><text content="market" fg={theme.textSecondary} /></box>
+                      <box flexDirection="row" gap={1}><box backgroundColor={theme.secondaryDim}><text content=" b " fg={theme.secondary} /></box><text content="portfolio" fg={theme.textSecondary} /></box>
                       <box flexDirection="row" gap={1}><box backgroundColor={theme.accentDim}><text content=" n " fg={theme.accent} /></box><text content="recon" fg={theme.textSecondary} /></box>
                       <box flexDirection="row" gap={1}><box backgroundColor={theme.errorDim}><text content=" q " fg={theme.error} /></box><text content="quit" fg={theme.textSecondary} /></box>
                     </box>
@@ -2112,13 +2117,13 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                   { key: "␣", label: "tag", priority: 2 },
                   { key: "?", label: "help", priority: 3, onClick: () => setShowHelp((v) => !v) },
                   { key: "n", label: reconMode ? "recon:ON" : "recon", priority: 4, onClick: () => setReconMode((v) => !v) },
-                  { key: "M", label: "market", priority: 5, onClick: () => { if (!showMarket) { setShowMarket(true); setMarketView("browse"); setMarketSelectedIdx(0); void loadMarketListings(); } else { setShowMarket(false); } } },
-                  { key: "S", label: "snipe", priority: 6 },
+                  { key: "m", label: "market", priority: 5, onClick: () => { if (!showMarket) { setShowMarket(true); setMarketView("browse"); setMarketSelectedIdx(0); void loadMarketListings(); } else { setShowMarket(false); } } },
+                  { key: "z", label: "snipe", priority: 6 },
                   { key: "e", label: "expand", priority: 7, onClick: () => { setInputMode("expand"); setMode("input"); setInputValue(""); } },
                   { key: "Tab", label: "tabs", priority: 8 },
                   ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 9 }] : []),
                   { key: "d", label: "suggest", priority: 10 },
-                  { key: "P", label: showPortfolio ? "close" : "dash", priority: 11, onClick: () => setShowPortfolio((v) => !v) },
+                  { key: "b", label: showPortfolio ? "close" : "dash", priority: 11, onClick: () => setShowPortfolio((v) => !v) },
                   { key: "p", label: "portfolio", priority: 12 },
                 ];
                 const maxHints = Math.floor((width - 20) / 10);
@@ -2128,7 +2133,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                     {visibleHints.map((h) => (
                       <box key={h.key} flexDirection="row" gap={0} onMouseDown={h.onClick}>
                         <box backgroundColor={theme.textDisabled}><text content={` ${h.key} `} fg={theme.background} /></box>
-                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "P" && showPortfolio ? theme.primary : h.key === "M" && showMarket ? theme.secondary : theme.textMuted} />
+                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "b" && showPortfolio ? theme.primary : h.key === "m" && showMarket ? theme.secondary : theme.textMuted} />
                       </box>
                     ))}
                   </>
