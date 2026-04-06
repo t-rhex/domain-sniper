@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { isValidDomain, assertValidDomain, sanitizeDomainList, isValidSessionId, safePath } from "../src/core/validate.js";
+import { isValidDomain, assertValidDomain, sanitizeDomainList, isValidSessionId, safePath, detectTldTypo } from "../src/core/validate.js";
 
 describe("isValidDomain", () => {
   test("accepts valid domains", () => {
@@ -98,5 +98,40 @@ describe("safePath", () => {
   test("rejects paths outside allowed roots", () => {
     expect(() => safePath("/etc/passwd", [process.cwd()])).toThrow("outside allowed roots");
     expect(() => safePath("../../etc/passwd", ["/tmp"])).toThrow("outside allowed roots");
+  });
+});
+
+describe("detectTldTypo", () => {
+  test("detects common typos from correction table", () => {
+    expect(detectTldTypo("google.commm")).toBe("google.com");
+    expect(detectTldTypo("test.conn")).toBe("test.com");
+    expect(detectTldTypo("site.nett")).toBe("site.net");
+    expect(detectTldTypo("example.orgg")).toBe("example.org");
+    expect(detectTldTypo("app.ioo")).toBe("app.io");
+    expect(detectTldTypo("tool.deev")).toBe("tool.dev");
+    expect(detectTldTypo("my.appp")).toBe("my.app");
+  });
+
+  test("returns null for valid TLDs", () => {
+    expect(detectTldTypo("google.com")).toBeNull();
+    expect(detectTldTypo("test.io")).toBeNull();
+    expect(detectTldTypo("site.dev")).toBeNull();
+    expect(detectTldTypo("example.org")).toBeNull();
+    expect(detectTldTypo("app.xyz")).toBeNull();
+  });
+
+  test("suggests close matches via edit distance", () => {
+    expect(detectTldTypo("test.cim")).toBe("test.com");
+    expect(detectTldTypo("test.vom")).toBe("test.com");
+  });
+
+  test("returns null for strings without dots", () => {
+    expect(detectTldTypo("localhost")).toBeNull();
+    expect(detectTldTypo("nodots")).toBeNull();
+  });
+
+  test("handles subdomains correctly", () => {
+    expect(detectTldTypo("sub.domain.commm")).toBe("sub.domain.com");
+    expect(detectTldTypo("a.b.c.nett")).toBe("a.b.c.net");
   });
 });

@@ -7,7 +7,7 @@ import { lookupDns } from "./core/features/dns-details.js";
 import { httpProbe } from "./core/features/http-probe.js";
 import { checkWayback } from "./core/features/wayback.js";
 import { calculateDomainAge } from "./core/features/domain-age.js";
-import { sanitizeDomainList, safePath } from "./core/validate.js";
+import { sanitizeDomainList, safePath, detectTldTypo } from "./core/validate.js";
 import { bashCompletions, zshCompletions, fishCompletions } from "./completions.js";
 import { checkSocialMedia } from "./core/features/social-check.js";
 import { detectTechStack } from "./core/features/tech-stack.js";
@@ -1598,6 +1598,17 @@ async function runHeadless(domains: string[], options: CliOptions) {
     const content = readFileSync(filePath, "utf-8");
     domainList.push(...parseDomainList(content));
   }
+
+  // Auto-detect and correct TLD typos before sanitization
+  const rawList = [...domainList];
+  domainList = domainList.map((d) => {
+    const suggestion = detectTldTypo(d);
+    if (suggestion) {
+      console.error(`  Typo? "${d}" → auto-corrected to "${suggestion}"`);
+      return suggestion;
+    }
+    return d;
+  });
 
   const rawCount = domainList.length;
   domainList = sanitizeDomainList(domainList);

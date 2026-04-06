@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from "fs";
 import { theme, borders, statusStyle, type DomainStatus } from "./core/theme.js";
 import type { DomainEntry } from "./core/types.js";
 import { createEmptyEntry } from "./core/types.js";
-import { sanitizeDomainList, safePath } from "./core/validate.js";
+import { sanitizeDomainList, safePath, detectTldTypo } from "./core/validate.js";
 import { lookupDns } from "./core/features/dns-details.js";
 import { httpProbe } from "./core/features/http-probe.js";
 import { checkWayback } from "./core/features/wayback.js";
@@ -263,13 +263,30 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
 
   const processAllDomains = useCallback(async (domainList: string[], append = false) => {
     if (processingRef.current) return;
+
+    // Deduplicate
+    const uniqueList = [...new Set(domainList)];
+
+    // If appending, also remove domains already in the list
+    const existingDomains = append ? new Set(domains.map((d) => d.domain)) : new Set<string>();
+    const newDomains = uniqueList.filter((d) => !existingDomains.has(d));
+
+    if (newDomains.length === 0) {
+      log("All domains already in list", theme.textMuted);
+      return;
+    }
+
+    if (newDomains.length < domainList.length) {
+      log(`Skipped ${domainList.length - newDomains.length} duplicate(s)`, theme.textDisabled);
+    }
+
     processingRef.current = true;
     setMode("scanning");
 
     let sessionId: number | undefined;
     try { sessionId = dbCreateSession(); } catch {}
 
-    const entries: DomainEntry[] = domainList.map((d) => createEmptyEntry(d));
+    const entries: DomainEntry[] = newDomains.map((d) => createEmptyEntry(d));
 
     if (append) {
       setDomains((prev: DomainEntry[]) => [...prev, ...entries]);
@@ -278,8 +295,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     }
 
     const startIdx = append ? domainsCountRef.current : 0;
-    log(`━━━ Scanning ${domainList.length} domain${domainList.length > 1 ? "s" : ""} ━━━`, theme.info);
-    setScanProgress({ current: 0, total: domainList.length });
+    log(`━━━ Scanning ${newDomains.length} domain${newDomains.length > 1 ? "s" : ""} ━━━`, theme.info);
+    setScanProgress({ current: 0, total: newDomains.length });
 
     // Concurrent pool
     const CONCURRENCY = 5;
@@ -295,7 +312,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           return u;
         });
 
-        const result = await processDomain(domainList[i]!);
+        const result = await processDomain(newDomains[i]!);
         setDomains((prev: DomainEntry[]) => { const u = [...prev]; u[globalIdx] = result; return u; });
         setScanProgress((prev) => prev ? { ...prev, current: prev.current + 1 } : null);
 
@@ -306,13 +323,13 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
             return u;
           });
           try {
-            const regResult = await registerDomain(domainList[i]!, registrarConfig);
+            const regResult = await registerDomain(newDomains[i]!, registrarConfig);
             setDomains((prev: DomainEntry[]) => {
               const u = [...prev];
               if (u[globalIdx]) u[globalIdx] = { ...u[globalIdx]!, status: regResult.success ? "registered" : u[globalIdx]!.status, registration: regResult };
               return u;
             });
-            if (regResult.success) log(`★ REG'd ${domainList[i]}`, theme.secondary);
+            if (regResult.success) log(`★ REG'd ${newDomains[i]}`, theme.secondary);
           } catch (err: unknown) {
             log(`REG failed: ${err instanceof Error ? err.message : "unknown"}`, theme.error);
           }
@@ -324,18 +341,18 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     }
 
     const workers = Array.from(
-      { length: Math.min(CONCURRENCY, domainList.length) },
+      { length: Math.min(CONCURRENCY, newDomains.length) },
       () => worker()
     );
     await Promise.all(workers);
 
-    try { if (sessionId) updateSessionCount(sessionId, domainList.length); } catch {}
+    try { if (sessionId) updateSessionCount(sessionId, newDomains.length); } catch {}
 
     processingRef.current = false;
     setScanProgress(null);
     setMode("done");
     log("━━━ Scan complete ━━━", theme.info);
-  }, [autoRegister, registrarConfig, processDomain, log]);
+  }, [autoRegister, registrarConfig, processDomain, log, domains]);
 
   // ─── Marketplace loaders ────────────────────────────────
 
@@ -931,8 +948,22 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         if (list.length > 0) { log(`Loaded ${list.length} from ${v}`, theme.info); processAllDomains(list, domains.length > 0); }
       } else {
         const list = v.split(/[,\s]+/).map((d: string) => d.trim().toLowerCase()).filter(Boolean);
-        const validated = sanitizeDomainList(list);
-        if (validated.length > 0) processAllDomains(validated, domains.length > 0);
+
+        // Auto-detect and warn about TLD typos
+        const corrected: string[] = [];
+        for (const d of list) {
+          const suggestion = detectTldTypo(d);
+          if (suggestion) {
+            log(`Auto-corrected: "${d}" → "${suggestion}"`, theme.warning);
+            corrected.push(suggestion);
+          } else {
+            corrected.push(d);
+          }
+        }
+
+        const validated = sanitizeDomainList(corrected);
+        const unique = [...new Set(validated)];
+        if (unique.length > 0) processAllDomains(unique, domains.length > 0);
         else log("No valid domains entered", theme.warning);
       }
     }
