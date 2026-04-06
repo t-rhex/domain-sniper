@@ -112,29 +112,53 @@ program
 program
   .command("suggest <keyword>")
   .description("Generate domain name suggestions from a keyword")
-  .option("-t, --tld <tld>", "TLD to use", "com")
+  .option("-t, --tld <tld>", "TLD or 'all' for multi-TLD", "com")
   .option("-n, --count <n>", "Number of suggestions", "20")
   .option("--check", "Check availability of suggestions", false)
   .action(async (keyword: string, opts: { tld: string; count: string; check: boolean }) => {
-    const { generateSuggestions } = await import("./core/features/domain-suggest.js");
-    const suggestions = generateSuggestions(keyword, opts.tld, parseInt(opts.count, 10));
+    const { generateScoredSuggestions } = await import("./core/features/domain-suggest.js");
+    const tlds = opts.tld === "all" ? ["com", "io", "dev", "app", "co", "net", "org", "me", "sh", "gg"] : [opts.tld];
+    const suggestions = generateScoredSuggestions(keyword, tlds, parseInt(opts.count, 10));
 
     if (opts.check) {
       const { whoisLookup } = await import("./core/whois.js");
       console.log(`\nChecking ${suggestions.length} suggestions for "${keyword}"...\n`);
-      for (const s of suggestions) {
-        const whois = await whoisLookup(s.domain);
-        const status = whois.available ? "\x1b[32mAVAILABLE\x1b[0m" : "\x1b[31mTAKEN\x1b[0m";
-        console.log(`  ${status}  ${s.domain}  (${s.strategy})`);
-        await new Promise((r) => setTimeout(r, 1000));
+
+      // Concurrent check (5 at a time)
+      const CONCURRENCY = 5;
+      const results: Array<{ domain: string; strategy: string; available: boolean; score: number; grade: string }> = [];
+
+      for (let i = 0; i < suggestions.length; i += CONCURRENCY) {
+        const batch = suggestions.slice(i, i + CONCURRENCY);
+        const batchResults = await Promise.all(
+          batch.map(async (s) => {
+            const whois = await whoisLookup(s.domain);
+            return { domain: s.domain, strategy: s.strategy, available: whois.available, score: s.score, grade: s.grade };
+          })
+        );
+        results.push(...batchResults);
       }
+
+      // Sort: available first, then by score
+      results.sort((a, b) => {
+        if (a.available && !b.available) return -1;
+        if (!a.available && b.available) return 1;
+        return b.score - a.score;
+      });
+
+      for (const r of results) {
+        const status = r.available ? "\x1b[32mAVAILABLE\x1b[0m" : "\x1b[31mTAKEN\x1b[0m";
+        console.log(`  ${status}  ${r.grade.padEnd(3)} ${r.domain.padEnd(30)} (${r.strategy})`);
+      }
+      console.log(`\n  ${results.filter(r => r.available).length} available out of ${results.length} checked\n`);
     } else {
-      console.log(`\nSuggestions for "${keyword}" (.${opts.tld}):\n`);
+      // No check — just list suggestions with scores
+      console.log(`\nSuggestions for "${keyword}":\n`);
       for (const s of suggestions) {
-        console.log(`  ${s.domain}  (${s.strategy})`);
+        console.log(`  ${s.grade.padEnd(3)} ${s.domain.padEnd(30)} (${s.strategy})`);
       }
+      console.log();
     }
-    console.log();
   });
 
 // ─── Portfolio subcommand ────────────────────────────────

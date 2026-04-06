@@ -27,7 +27,7 @@ import { discoverSubdomains, getActiveSubdomains } from "./core/features/subdoma
 import { checkMarketplaces } from "./core/features/marketplace.js";
 import { sendWebhook } from "./core/features/webhooks.js";
 import { loadConfig } from "./core/features/config.js";
-import { generateSuggestions } from "./core/features/domain-suggest.js";
+import { generateSuggestions, generateScoredSuggestions } from "./core/features/domain-suggest.js";
 import { addToPortfolio } from "./core/features/portfolio.js";
 import { snipeDomain, getSnipeTargets, cancelSnipe } from "./core/features/snipe.js";
 import {
@@ -60,7 +60,7 @@ import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./core/featu
 // ─── Types ────────────────────────────────────────────────
 
 type Mode = "idle" | "input" | "scanning" | "done" | "watching";
-type InputMode = "domain" | "file" | "expand" | "variations" | "export" | "load";
+type InputMode = "domain" | "file" | "expand" | "variations" | "export" | "load" | "suggest";
 
 interface AppProps {
   initialDomains?: string[];
@@ -500,11 +500,11 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         setShowActionMenu(false);
         const name = selected.domain.split(".")[0] || "";
         const existingDomains = new Set(domains.map((d) => d.domain));
-        const suggestions = generateSuggestions(name);
-        const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain)).slice(0, 15).map((s) => s.domain);
+        const suggestions = generateScoredSuggestions(name, ["com", "io", "dev", "app", "co"], 20);
+        const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain));
         if (newSuggestions.length > 0) {
-          log(`Generated ${newSuggestions.length} suggestions from "${name}"`, theme.info);
-          processAllDomains(newSuggestions, true);
+          log(`Generated ${newSuggestions.length} scored suggestions from "${name}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
+          processAllDomains(newSuggestions.map((s) => s.domain), true);
         } else {
           log(`All suggestions for "${name}" already in list`, theme.textMuted);
         }
@@ -734,6 +734,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         return;
       }
       if (key === "x") { setInputMode("export"); setMode("input"); setInputValue(""); log("Enter export path (.csv or .json)...", theme.textMuted); return; }
+      if (key === "d" && !selected && !showActionMenu && !showMarket && !showPortfolio) { setInputMode("suggest"); setMode("input"); setInputValue(""); log("Enter keyword for domain suggestions...", theme.textMuted); return; }
     }
 
     // ── Input mode ──
@@ -903,19 +904,20 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
 
-      // Domain suggestions (Issue 6: deduplicate)
+      // Domain suggestions — scored, multi-TLD
       else if (key === "d" && selected) {
         const name = selected.domain.split(".")[0] || "";
-        const suggestions = generateSuggestions(name);
         const existingDomains = new Set(domains.map((d) => d.domain));
-        const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain)).slice(0, 15);
+        const suggestions = generateScoredSuggestions(name, ["com", "io", "dev", "app", "co"], 20);
+        const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain));
         if (newSuggestions.length > 0) {
-          log(`Generated ${newSuggestions.length} new suggestions from "${name}"`, theme.info);
+          log(`Generated ${newSuggestions.length} scored suggestions from "${name}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
           processAllDomains(newSuggestions.map((s) => s.domain), true);
         } else {
           log(`All suggestions for "${name}" already in list`, theme.textMuted);
         }
       }
+
 
       // Add to portfolio
       else if (key === "p" && selected) {
@@ -1098,6 +1100,22 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         setMode("done");
         log(`Loaded session: ${session.id} (${session.domains.length} domains)`, theme.info);
       } else { log("Session not found", theme.error); setMode(domains.length > 0 ? "done" : "idle"); }
+    } else if (inputMode === "suggest") {
+      const suggestions = generateScoredSuggestions(v, ["com", "io", "dev", "app", "co"], 20);
+      if (suggestions.length > 0) {
+        const existingDomains = new Set(domains.map((d) => d.domain));
+        const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain));
+        if (newSuggestions.length > 0) {
+          log(`Generated ${newSuggestions.length} suggestions for "${v}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
+          processAllDomains(newSuggestions.map((s) => s.domain), domains.length > 0);
+        } else {
+          log(`All suggestions for "${v}" already in list`, theme.textMuted);
+          setMode(domains.length > 0 ? "done" : "idle");
+        }
+      } else {
+        log("No suggestions generated", theme.warning);
+        setMode(domains.length > 0 ? "done" : "idle");
+      }
     } else if (inputMode === "domain") {
       if (existsSync(v)) {
         const content = readFileSync(v, "utf-8");
@@ -1163,8 +1181,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const dLine = (w: number) => "═".repeat(Math.max(1, w - 2));
   const logPanelH = Math.max(4, Math.floor((height - 5) * 0.28));
 
-  const inputLabel = marketInputMode === "search" ? "SEARCH" : marketInputMode === "list-price" ? "PRICE" : marketInputMode === "offer-amount" ? "OFFER" : inputMode === "file" ? "FILE" : inputMode === "expand" ? "EXPAND" : inputMode === "export" ? "EXPORT" : inputMode === "load" ? "LOAD" : "SCAN";
-  const inputPlaceholder = marketInputMode === "search" ? "Search domains..." : marketInputMode === "list-price" ? `Asking price for ${marketListDomain}` : marketInputMode === "offer-amount" ? "Your offer amount" : inputMode === "file" ? "/path/to/domains.txt" : inputMode === "expand" ? "coolstartup" : inputMode === "export" ? "results.csv or results.json" : inputMode === "load" ? "session-id or path" : "domains or /path/to/file";
+  const inputLabel = marketInputMode === "search" ? "SEARCH" : marketInputMode === "list-price" ? "PRICE" : marketInputMode === "offer-amount" ? "OFFER" : inputMode === "suggest" ? "SUGGEST" : inputMode === "file" ? "FILE" : inputMode === "expand" ? "EXPAND" : inputMode === "export" ? "EXPORT" : inputMode === "load" ? "LOAD" : "SCAN";
+  const inputPlaceholder = marketInputMode === "search" ? "Search domains..." : marketInputMode === "list-price" ? `Asking price for ${marketListDomain}` : marketInputMode === "offer-amount" ? "Your offer amount" : inputMode === "suggest" ? "Enter a keyword (e.g., startup, cloud)" : inputMode === "file" ? "/path/to/domains.txt" : inputMode === "expand" ? "coolstartup" : inputMode === "export" ? "results.csv or results.json" : inputMode === "load" ? "session-id or path" : "domains or /path/to/file";
 
   // ─── Render ─────────────────────────────────────────────
 
@@ -1580,6 +1598,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  /  i          Scan domains" fg={theme.textSecondary} />
                 <text content="  f             Load from file" fg={theme.textSecondary} />
                 <text content="  e             TLD expansion" fg={theme.textSecondary} />
+                <text content="  d             Suggest domains from keyword" fg={theme.textSecondary} />
                 <text content="  Space         Tag / untag" fg={theme.textSecondary} />
                 <text content="  Tab           Cycle intel tabs" fg={theme.textSecondary} />
                 <text content="  n             Toggle recon mode" fg={theme.textSecondary} />
