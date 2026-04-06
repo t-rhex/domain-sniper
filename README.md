@@ -60,7 +60,7 @@ domsniper snipe run
 - **TLD Expansion** -- Check a name across all major TLDs
 - **Variations** -- Typos, plurals, prefixes, suffixes
 
-### Security Recon (toggle with `n` key)
+### Security Recon (on by default, toggle with `n` key)
 - **Port Scanner** -- 20 ports, banner grabbing
 - **Security Headers** -- 9 headers, A+ to F grading
 - **Email Security** -- SPF/DKIM/DMARC audit
@@ -94,22 +94,41 @@ domsniper snipe run
 - CA cert generation for HTTPS
 - Credential redaction in logs
 
-## TUI Shortcuts
+## TUI Usage
 
-| Key | Action | Key | Action |
-|-----|--------|-----|--------|
-| `/` | Scan domains | `Tab` | Cycle intel tabs |
-| `e` | TLD expansion | `n` | Toggle recon mode |
-| `f` | Load from file | `s` | Cycle status filter |
-| `v` | Variations | `o/O` | Sort field/order |
-| `d` | Suggestions | `Space` | Tag/untag |
-| `r` | Register | `R` | Bulk register |
-| `S` | Snipe domain | `D` | Drop catch |
-| `p` | Add to portfolio | `P` | Portfolio dashboard |
-| `M` | Marketplace | `w` | Watch tagged |
-| `h` | Scan history | `c` | Clear cache |
-| `x` | Export CSV/JSON | `?` | Help |
-| `Ctrl+S` | Save session | `q` | Quit |
+**Global shortcuts** (work anywhere):
+
+| Key | Action |
+|-----|--------|
+| `/` or `i` | Scan domains |
+| `f` | Load from file |
+| `e` | TLD expansion |
+| `Space` | Tag/untag domain |
+| `Tab` | Cycle intel tabs (Overview / DNS / Security / Recon) |
+| `n` | Toggle recon mode |
+| `s` | Cycle status filter |
+| `o` | Cycle sort |
+| `b` | Portfolio dashboard |
+| `m` | Marketplace |
+| `?` | Help |
+| `q` | Quit |
+
+**Domain actions** (press `Enter` on a selected domain to open context menu):
+
+| Key | Action |
+|-----|--------|
+| `r` | Register domain |
+| `z` | Snipe (auto-register when it drops) |
+| `p` | Add to portfolio |
+| `d` | Suggest similar names |
+| `v` | Generate variations |
+| `e` | Check other TLDs |
+| `w` | Tag for watching |
+| `h` | View scan history |
+| `c` | Clear cache |
+| `Enter` | Rescan |
+
+**Mouse:** Click domain list items, INTEL tabs, and footer buttons.
 
 ## CLI Commands
 
