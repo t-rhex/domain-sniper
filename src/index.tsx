@@ -1613,6 +1613,13 @@ async function runHeadless(domains: string[], options: CliOptions) {
   const rawCount = domainList.length;
   domainList = sanitizeDomainList(domainList);
 
+  // Deduplicate
+  const beforeDedup = domainList.length;
+  domainList = [...new Set(domainList)];
+  if (domainList.length < beforeDedup) {
+    console.error(`  Removed ${beforeDedup - domainList.length} duplicate(s)`);
+  }
+
   if (domainList.length === 0) {
     if (rawCount > 0) {
       console.error(`No valid domains found (${rawCount} input(s) rejected). Domains must be like: example.com`);
