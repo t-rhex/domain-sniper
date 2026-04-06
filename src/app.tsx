@@ -503,8 +503,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         const suggestions = generateScoredSuggestions(name, ["com", "io", "dev", "app", "co"], 20);
         const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain));
         if (newSuggestions.length > 0) {
-          log(`Generated ${newSuggestions.length} scored suggestions from "${name}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
+          log(`Generated ${newSuggestions.length} suggestions from "${name}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
           processAllDomains(newSuggestions.map((s) => s.domain), true);
+          setShowGroups(true);
         } else {
           log(`All suggestions for "${name}" already in list`, theme.textMuted);
         }
@@ -516,7 +517,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         setShowActionMenu(false);
         const vars = generateVariations(selected.domain);
         log(`Generated ${vars.length} variations of ${selected.domain}`, theme.info);
-        if (vars.length > 0) processAllDomains(vars, true);
+        if (vars.length > 0) { processAllDomains(vars, true); setShowGroups(true); }
         return;
       }
 
@@ -526,7 +527,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         const name = selected.domain.split(".")[0] || "";
         const expanded = expandTlds(name, "popular");
         log(`Expanded "${name}" into ${expanded.length} TLD variants`, theme.info);
-        if (expanded.length > 0) processAllDomains(expanded, domains.length > 0);
+        if (expanded.length > 0) { processAllDomains(expanded, domains.length > 0); setShowGroups(true); }
         return;
       }
 
@@ -730,7 +731,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         // Generate variations for selected domain
         const vars = generateVariations(selected.domain);
         log(`Generated ${vars.length} variations of ${selected.domain}`, theme.info);
-        if (vars.length > 0) processAllDomains(vars, true);
+        if (vars.length > 0) { processAllDomains(vars, true); setShowGroups(true); }
         return;
       }
       if (key === "x") { setInputMode("export"); setMode("input"); setInputValue(""); log("Enter export path (.csv or .json)...", theme.textMuted); return; }
@@ -911,8 +912,9 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         const suggestions = generateScoredSuggestions(name, ["com", "io", "dev", "app", "co"], 20);
         const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain));
         if (newSuggestions.length > 0) {
-          log(`Generated ${newSuggestions.length} scored suggestions from "${name}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
+          log(`Generated ${newSuggestions.length} suggestions from "${name}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
           processAllDomains(newSuggestions.map((s) => s.domain), true);
+          setShowGroups(true);
         } else {
           log(`All suggestions for "${name}" already in list`, theme.textMuted);
         }
@@ -1085,7 +1087,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     } else if (inputMode === "expand") {
       const expanded = expandTlds(v, "popular");
       log(`Expanded "${v}" into ${expanded.length} TLD variants`, theme.info);
-      if (expanded.length > 0) processAllDomains(expanded, domains.length > 0);
+      if (expanded.length > 0) { processAllDomains(expanded, domains.length > 0); setShowGroups(true); }
       else { setMode(domains.length > 0 ? "done" : "idle"); }
     } else if (inputMode === "export") {
       try {
@@ -1108,6 +1110,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         if (newSuggestions.length > 0) {
           log(`Generated ${newSuggestions.length} suggestions for "${v}" (top: ${newSuggestions[0]!.domain} ${newSuggestions[0]!.grade})`, theme.info);
           processAllDomains(newSuggestions.map((s) => s.domain), domains.length > 0);
+          setShowGroups(true);
         } else {
           log(`All suggestions for "${v}" already in list`, theme.textMuted);
           setMode(domains.length > 0 ? "done" : "idle");
