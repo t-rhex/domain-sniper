@@ -53,6 +53,7 @@ import { detectWaf } from "./core/features/waf-detect.js";
 import { scanPaths } from "./core/features/path-scanner.js";
 import { checkCors } from "./core/features/cors-check.js";
 import { groupDomains, shouldShowGroups, type DomainGroup } from "./core/features/grouping.js";
+import { getTimeline, loadHistoryScan, type HistoryTimeline } from "./core/features/history.js";
 import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getLatestScan, getDomainByName, createSession as dbCreateSession, updateSessionCount, getDbStats, getAllDomains, getPortfolioExpiring } from "./core/db.js";
 import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, getSnipeStats, type PortfolioStatus, type TransactionType } from "./core/db.js";
 import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./core/features/portfolio-monitor.js";
@@ -103,6 +104,8 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number } | null>(null);
   const [confirmBulkRegister, setConfirmBulkRegister] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(0);
 
   // Marketplace state
   const [showMarket, setShowMarket] = useState(false);
@@ -443,6 +446,37 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (showHelp && key === "escape") { setShowHelp(false); return; }
     if (showHelp) return; // Consume all keys while help is shown
 
+    // ── History panel ──
+    if (showHistory && selected) {
+      if (key === "escape") { setShowHistory(false); return; }
+      if (key === "up" || key === "k") { setHistoryIndex((i) => Math.max(0, i - 1)); return; }
+      if (key === "down" || key === "j") { setHistoryIndex((i) => i + 1); return; }
+
+      // Load selected historical scan
+      if (key === "return") {
+        const timeline = getTimeline(selected.domain, 20);
+        const entry = timeline.entries[historyIndex];
+        if (entry) {
+          const scan = loadHistoryScan(entry.id);
+          if (scan) {
+            const idx = domains.indexOf(selected);
+            if (idx >= 0) {
+              setDomains((prev: DomainEntry[]) => {
+                const u = [...prev];
+                u[idx] = { ...scan, tagged: prev[idx]!.tagged };
+                return u;
+              });
+              log(`Loaded scan from ${entry.scannedAt}`, theme.info);
+            }
+          }
+        }
+        setShowHistory(false);
+        return;
+      }
+
+      return; // Consume all keys while history is open
+    }
+
     // ── Action menu mode ──
     if (showActionMenu && selected) {
       const idx = domains.indexOf(selected);
@@ -560,18 +594,11 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         return;
       }
 
-      // History
+      // History panel
       if (key === "h") {
         setShowActionMenu(false);
-        const history = getScanHistory(selected.domain, 5);
-        if (history.length > 0) {
-          log(`─── History for ${selected.domain} ───`, theme.secondary);
-          for (const h of history) {
-            log(`  ${h.scanned_at} — ${h.status}${h.score ? ` (${h.score})` : ""}`, theme.textSecondary);
-          }
-        } else {
-          log(`No scan history for ${selected.domain}`, theme.textMuted);
-        }
+        setShowHistory(true);
+        setHistoryIndex(0);
         return;
       }
 
@@ -813,6 +840,12 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         }
       }
       else if (key === "end") setSelectedIndex(Math.max(0, filteredDomains.length - 1));
+
+      // History panel (global shortcut)
+      else if (key === "h" && selected && !showActionMenu && !showMarket && !showPortfolio && !showHistory) {
+        setShowHistory(true);
+        setHistoryIndex(0);
+      }
 
       // Register (Issue 5: feedback on all statuses)
       else if (key === "r" && selected) {
@@ -1621,7 +1654,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  d             Suggest similar" fg={theme.textSecondary} />
                 <text content="  v             Variations" fg={theme.textSecondary} />
                 <text content="  w             Tag for watch" fg={theme.textSecondary} />
-                <text content="  h             Scan history" fg={theme.textSecondary} />
+                <text content="  h             History timeline (with deltas)" fg={theme.textSecondary} />
                 <text content="  c             Clear cache" fg={theme.textSecondary} />
                 <text content="  x             Export" fg={theme.textSecondary} />
                 <text content="  Enter         Rescan" fg={theme.textSecondary} />
@@ -1641,6 +1674,94 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  l             List domain for sale" fg={theme.textSecondary} />
                 <text content="  o             Make offer (detail view)" fg={theme.textSecondary} />
               </box>
+            </scrollbox>
+          ) : showHistory && selected ? (
+            <scrollbox flexGrow={1} paddingLeft={1} paddingRight={1} minHeight={0} scrollbarOptions={{ visible: true }}>
+              {(() => {
+                const timeline = getTimeline(selected.domain, 20);
+                const maxIdx = Math.max(0, timeline.entries.length - 1);
+                const safeIdx = Math.min(historyIndex, maxIdx);
+
+                return (
+                  <box flexDirection="column" gap={0} paddingTop={1}>
+                    {/* Header */}
+                    <box flexDirection="row" gap={2} paddingLeft={1}>
+                      <text content="HISTORY" fg={theme.secondary} />
+                      <text content={selected.domain} fg={theme.text} />
+                      <text content={`(${timeline.totalScans} scans)`} fg={theme.textDisabled} />
+                    </box>
+
+                    {timeline.firstSeen && (
+                      <box flexDirection="row" gap={2} paddingLeft={1}>
+                        <text content={`First: ${timeline.firstSeen}`} fg={theme.textDisabled} />
+                        <text content={`Latest: ${timeline.lastSeen}`} fg={theme.textDisabled} />
+                      </box>
+                    )}
+
+                    <text content="" />
+
+                    {/* Status changes summary */}
+                    {timeline.statusChanges.length > 0 && (
+                      <box flexDirection="column" paddingLeft={1}>
+                        <text content="STATUS CHANGES" fg={theme.warning} />
+                        {timeline.statusChanges.map((sc, i) => (
+                          <box key={i} flexDirection="row" gap={1} paddingLeft={1}>
+                            <text content={sc.from} fg={theme.error} />
+                            <text content={"\u2192"} fg={theme.textDisabled} />
+                            <text content={sc.to} fg={theme.primary} />
+                            <text content={sc.at} fg={theme.textDisabled} />
+                          </box>
+                        ))}
+                        <text content="" />
+                      </box>
+                    )}
+
+                    {/* Timeline entries */}
+                    <text content="  SCANS (Enter to load, Esc to close)" fg={theme.textMuted} paddingLeft={1} />
+                    <text content="" />
+
+                    {timeline.entries.length === 0 ? (
+                      <box paddingLeft={2} paddingTop={1}>
+                        <text content="No scan history for this domain" fg={theme.textDisabled} />
+                        <text content="Scan this domain first to build history" fg={theme.textDisabled} />
+                      </box>
+                    ) : (
+                      timeline.entries.map((entry, i) => {
+                        const active = safeIdx === i;
+                        const statusColor = entry.status === "available" ? theme.primary : entry.status === "expired" ? theme.warning : entry.status === "error" ? theme.error : theme.textSecondary;
+                        const deltas = i < timeline.deltas.length ? timeline.deltas[i]! : [];
+
+                        return (
+                          <box key={entry.id} flexDirection="column">
+                            {/* Scan entry row */}
+                            <box flexDirection="row" gap={1} paddingLeft={1} backgroundColor={active ? theme.primaryDim : "transparent"}>
+                              <text content={active ? "\u25b8" : " "} fg={theme.primary} />
+                              <text content={entry.scannedAt} fg={active ? theme.text : theme.textDisabled} />
+                              <text content={entry.status} fg={statusColor} />
+                              {entry.score !== null && <text content={`(${entry.score})`} fg={theme.textDisabled} />}
+                            </box>
+
+                            {/* Deltas (changes from this scan to the next) */}
+                            {deltas.length > 0 && (
+                              <box flexDirection="column" paddingLeft={3}>
+                                {deltas.map((d, j) => (
+                                  <box key={j} flexDirection="row" gap={1}>
+                                    <text content={d.severity === "critical" ? "!!" : d.severity === "warning" ? " !" : "  "} fg={d.severity === "critical" ? theme.error : d.severity === "warning" ? theme.warning : theme.textDisabled} />
+                                    <text content={d.field} fg={theme.textMuted} />
+                                    <text content={d.from} fg={theme.error} />
+                                    <text content={"\u2192"} fg={theme.textDisabled} />
+                                    <text content={d.to} fg={theme.primary} />
+                                  </box>
+                                ))}
+                              </box>
+                            )}
+                          </box>
+                        );
+                      })
+                    )}
+                  </box>
+                );
+              })()}
             </scrollbox>
           ) : showActionMenu && selected ? (
             <box flexGrow={1} paddingLeft={2} paddingTop={1} minHeight={0} flexDirection="column">
@@ -1695,7 +1816,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
 
               <box flexDirection="row" gap={1} paddingLeft={1}>
                 <box backgroundColor={theme.textDisabled}><text content=" h " fg={theme.text} /></box>
-                <text content="View scan history" fg={theme.textSecondary} />
+                <text content="History timeline (with deltas)" fg={theme.textSecondary} />
               </box>
 
               <box flexDirection="row" gap={1} paddingLeft={1}>
@@ -2387,7 +2508,13 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         <text content={dLine(width)} fg={theme.border} paddingLeft={1} />
         <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
           <box flexDirection="row" gap={1}>
-            {showActionMenu ? (
+            {showHistory ? (
+              <>
+                <text content={"\u2191\u2193 navigate"} fg={theme.textMuted} />
+                <box backgroundColor={theme.primaryDim}><text content={" \u23ce "} fg={theme.primary} /></box><text content="load scan" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" esc " fg={theme.background} /></box><text content="close" fg={theme.textMuted} />
+              </>
+            ) : showActionMenu ? (
               <>
                 <text content="Press a key or" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" esc " fg={theme.background} /></box>
