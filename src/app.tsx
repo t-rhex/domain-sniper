@@ -52,6 +52,7 @@ import { auditSecurityHeaders } from "./core/features/security-headers.js";
 import { detectWaf } from "./core/features/waf-detect.js";
 import { scanPaths } from "./core/features/path-scanner.js";
 import { checkCors } from "./core/features/cors-check.js";
+import { groupDomains, shouldShowGroups, type DomainGroup } from "./core/features/grouping.js";
 import { upsertDomain, saveScan, getCached, setCache, clearCache, getScanHistory, getLatestScan, getDomainByName, createSession as dbCreateSession, updateSessionCount, getDbStats, getAllDomains, getPortfolioExpiring } from "./core/db.js";
 import { getPortfolioDashboard, getUnacknowledgedAlerts, acknowledgeAllAlerts, getMonthlyReport, addTransaction, updatePortfolioStatus, getCategories, getSnipeStats, type PortfolioStatus, type TransactionType } from "./core/db.js";
 import { generateRenewalCalendar, estimateAnnualRenewalCost } from "./core/features/portfolio-monitor.js";
@@ -101,6 +102,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [intelTab, setIntelTab] = useState<IntelTab>("overview");
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number } | null>(null);
   const [confirmBulkRegister, setConfirmBulkRegister] = useState(false);
+  const [showGroups, setShowGroups] = useState(false);
 
   // Marketplace state
   const [showMarket, setShowMarket] = useState(false);
@@ -421,6 +423,10 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   // ─── Filtered domains ──────────────────────────────────
 
   const filteredDomains = useMemo(() => filterDomains(domains, filter), [domains, filter]);
+  const domainGroups = useMemo(() => {
+    if (!showGroups || filteredDomains.length < 4) return null;
+    return groupDomains(filteredDomains);
+  }, [filteredDomains, showGroups]);
   const selected = filteredDomains[selectedIndex] || null;
 
   // ─── Keyboard ───────────────────────────────────────────
@@ -795,7 +801,15 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
       else if (key === "down" || key === "j" || (ctrl && key === "n")) setSelectedIndex((i: number) => Math.min(filteredDomains.length - 1, i + 1));
       else if (key === "pageup") setSelectedIndex((i: number) => Math.max(0, i - 10));
       else if (key === "pagedown") setSelectedIndex((i: number) => Math.min(filteredDomains.length - 1, i + 10));
-      else if (key === "home" || key === "g") setSelectedIndex(0);
+      else if (key === "home") setSelectedIndex(0);
+      else if (key === "g") {
+        if (shouldShowGroups(filteredDomains)) {
+          setShowGroups((v) => !v);
+          log(showGroups ? "Flat list view" : "Grouped by base name", theme.textMuted);
+        } else {
+          log("Not enough domains to group", theme.textMuted);
+        }
+      }
       else if (key === "end") setSelectedIndex(Math.max(0, filteredDomains.length - 1));
 
       // Register (Issue 5: feedback on all statuses)
@@ -1452,29 +1466,68 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         {/* ─── LEFT PANEL ─── */}
         <box width={sidebarW} flexDirection="column" minHeight={0}>
           <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
-            <text content={` TARGETS ${filteredDomains.length !== stats.total ? `(${filteredDomains.length}/${stats.total})` : stats.total > 0 ? `(${stats.total})` : ""}`} fg={theme.primary} />
+            <box flexDirection="row" gap={1}>
+              <text content={` TARGETS ${filteredDomains.length !== stats.total ? `(${filteredDomains.length}/${stats.total})` : stats.total > 0 ? `(${stats.total})` : ""}`} fg={theme.primary} />
+              {showGroups && <text content="grouped" fg={theme.textDisabled} />}
+            </box>
             {stats.checking > 0 && <text content={`◆ ${stats.checking}`} fg={theme.warning} />}
           </box>
           <text content={hLine(sidebarW)} fg={theme.borderSubtle} paddingLeft={1} />
 
           {filteredDomains.length > 0 ? (
             <scrollbox flexGrow={1} paddingLeft={1} minHeight={0} scrollbarOptions={{ visible: true }}>
-              {filteredDomains.map((entry: DomainEntry, i: number) => {
-                const active = selectedIndex === i;
-                const ss = statusStyle(entry.status);
-                const cached = domainScores.get(entry.domain);
-                const gr = cached?.grade ?? scoreGrade(0);
-                return (
-                  <box key={entry.domain} flexDirection="row" backgroundColor={active ? theme.primaryDim : "transparent"} paddingLeft={1} gap={1} onMouseDown={() => setSelectedIndex(i)}>
-                    <text content={entry.tagged ? "◉" : " "} fg={entry.tagged ? theme.info : "transparent"} />
-                    <text content={ss.icon} fg={ss.fg} />
-                    <text content={entry.domain} fg={active ? theme.text : theme.textSecondary} />
-                    <box flexGrow={1} />
-                    <text content={gr.grade} fg={gr.color} />
-                    {entry.status === "checking" && <text content="···" fg={theme.warning} />}
-                  </box>
-                );
-              })}
+              {showGroups && domainGroups ? (
+                <>
+                  {domainGroups.map((group) => (
+                    <box key={group.baseName} flexDirection="column">
+                      {group.total >= 2 && (
+                        <box flexDirection="row" gap={1} paddingTop={1}>
+                          <text content={`▸ ${group.baseName}`} fg={theme.secondary} />
+                          <text content={`(${group.available > 0 ? `${group.available} avail` : ""}${group.expired > 0 ? ` ${group.expired} exp` : ""}${group.taken > 0 ? ` ${group.taken} tkn` : ""})`} fg={theme.textDisabled} />
+                        </box>
+                      )}
+                      {group.domains.map((domainName) => {
+                        const entry = filteredDomains.find((d) => d.domain === domainName);
+                        if (!entry) return null;
+                        const i = filteredDomains.indexOf(entry);
+                        const active = selectedIndex === i;
+                        const ss = statusStyle(entry.status);
+                        const cached = domainScores.get(entry.domain);
+                        return (
+                          <box key={entry.domain} flexDirection="row" backgroundColor={active ? theme.primaryDim : "transparent"} paddingLeft={group.total >= 2 ? 2 : 1} gap={1}
+                            onMouseDown={() => setSelectedIndex(i)}>
+                            <text content={entry.tagged ? "◉" : " "} fg={entry.tagged ? theme.info : "transparent"} />
+                            <text content={ss.icon} fg={ss.fg} />
+                            <text content={entry.domain} fg={active ? theme.text : theme.textSecondary} />
+                            <box flexGrow={1} />
+                            {cached && <text content={cached.grade.grade} fg={cached.grade.color} />}
+                            {entry.status === "checking" && <text content="···" fg={theme.warning} />}
+                          </box>
+                        );
+                      })}
+                    </box>
+                  ))}
+                </>
+              ) : (
+                <>
+                  {filteredDomains.map((entry: DomainEntry, i: number) => {
+                    const active = selectedIndex === i;
+                    const ss = statusStyle(entry.status);
+                    const cached = domainScores.get(entry.domain);
+                    const gr = cached?.grade ?? scoreGrade(0);
+                    return (
+                      <box key={entry.domain} flexDirection="row" backgroundColor={active ? theme.primaryDim : "transparent"} paddingLeft={1} gap={1} onMouseDown={() => setSelectedIndex(i)}>
+                        <text content={entry.tagged ? "◉" : " "} fg={entry.tagged ? theme.info : "transparent"} />
+                        <text content={ss.icon} fg={ss.fg} />
+                        <text content={entry.domain} fg={active ? theme.text : theme.textSecondary} />
+                        <box flexGrow={1} />
+                        <text content={gr.grade} fg={gr.color} />
+                        {entry.status === "checking" && <text content="···" fg={theme.warning} />}
+                      </box>
+                    );
+                  })}
+                </>
+              )}
             </scrollbox>
           ) : (
             <box flexGrow={1} alignItems="center" justifyContent="center" minHeight={0}>
@@ -1534,6 +1587,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="  m             Marketplace" fg={theme.textSecondary} />
                 <text content="  s             Cycle status filter" fg={theme.textSecondary} />
                 <text content="  o             Cycle sort" fg={theme.textSecondary} />
+                <text content="  g             Toggle group view" fg={theme.textSecondary} />
                 <text content="  q             Quit" fg={theme.textSecondary} />
                 <text content="  ?             This help" fg={theme.textSecondary} />
                 <text content="" />
@@ -1553,7 +1607,7 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
                 <text content="Navigation" fg={theme.secondary} />
                 <text content="  ↑/k  ↓/j     Move selection" fg={theme.textSecondary} />
                 <text content="  PgUp PgDn     Jump 10" fg={theme.textSecondary} />
-                <text content="  g / Home      First     End   Last" fg={theme.textSecondary} />
+                <text content="  Home          First     End   Last" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Session" fg={theme.secondary} />
                 <text content="  Ctrl+S        Save session" fg={theme.textSecondary} />
