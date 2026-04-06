@@ -90,11 +90,12 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
   const [showPortfolio, setShowPortfolio] = useState(false);
   const [filter, setFilter] = useState<FilterConfig>({ ...DEFAULT_FILTER });
   const [logs, setLogs] = useState<{ id: number; time: string; msg: string; fg: string }[]>([
-    { id: 0, time: ts(), msg: "Domain Sniper v0.1.3 initialized", fg: theme.textMuted },
+    { id: 0, time: ts(), msg: "domsniper v0.1.3 — recon mode on", fg: theme.textMuted },
     { id: 1, time: ts(), msg: "Press ? for all commands", fg: theme.textMuted },
   ]);
   const [registrarConfig] = useState<RegistrarConfig | null>(loadConfigFromEnv());
-  const [reconMode, setReconMode] = useState(false);
+  const [reconMode, setReconMode] = useState(true);
+  const [showActionMenu, setShowActionMenu] = useState(false);
   const [watcher, setWatcher] = useState<DomainWatcher | null>(null);
   const [watchCycle, setWatchCycle] = useState(0);
   const [intelTab, setIntelTab] = useState<IntelTab>("overview");
@@ -436,6 +437,155 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
     if (showHelp && key === "escape") { setShowHelp(false); return; }
     if (showHelp) return; // Consume all keys while help is shown
 
+    // ── Action menu mode ──
+    if (showActionMenu && selected) {
+      const idx = domains.indexOf(selected);
+
+      if (key === "escape") { setShowActionMenu(false); return; }
+
+      // Rescan
+      if (key === "return") {
+        setShowActionMenu(false);
+        clearCache(selected.domain);
+        if (idx >= 0) {
+          setDomains((prev: DomainEntry[]) => { const u = [...prev]; u[idx] = { ...createEmptyEntry(selected.domain), status: "checking" }; return u; });
+          processDomain(selected.domain).then((result) => { setDomains((prev: DomainEntry[]) => { const u = [...prev]; u[idx] = result; return u; }); });
+        }
+        log(`Rescanning ${selected.domain}...`, theme.info);
+        return;
+      }
+
+      // Register
+      if (key === "r" && (selected.status === "available" || selected.status === "expired") && registrarConfig?.apiKey) {
+        setShowActionMenu(false);
+        void handleRegister(idx);
+        return;
+      }
+
+      // Snipe
+      if (key === "z") {
+        setShowActionMenu(false);
+        if (selected.status === "taken" || selected.status === "expired") {
+          snipeDomain(selected.domain, { expiryDate: selected.whois?.expiryDate || undefined });
+          log(`Sniping ${selected.domain}`, theme.warning);
+        } else if (selected.status === "available") {
+          log(`Already available — press r to register`, theme.primary);
+        }
+        return;
+      }
+
+      // Add to portfolio
+      if (key === "p") {
+        setShowActionMenu(false);
+        try {
+          addToPortfolio(selected.domain, {
+            registrar: selected.whois?.registrar || selected.rdap?.registrar || "unknown",
+            expiryDate: selected.whois?.expiryDate || selected.rdap?.expiryDate || "",
+          });
+          log(`Added ${selected.domain} to portfolio`, theme.info);
+        } catch (err: unknown) {
+          log(`Portfolio: ${err instanceof Error ? err.message : "failed"}`, theme.error);
+        }
+        return;
+      }
+
+      // Suggest alternatives
+      if (key === "d") {
+        setShowActionMenu(false);
+        const name = selected.domain.split(".")[0] || "";
+        const existingDomains = new Set(domains.map((d) => d.domain));
+        const suggestions = generateSuggestions(name);
+        const newSuggestions = suggestions.filter((s) => !existingDomains.has(s.domain)).slice(0, 15).map((s) => s.domain);
+        if (newSuggestions.length > 0) {
+          log(`Generated ${newSuggestions.length} suggestions from "${name}"`, theme.info);
+          processAllDomains(newSuggestions, true);
+        } else {
+          log(`All suggestions for "${name}" already in list`, theme.textMuted);
+        }
+        return;
+      }
+
+      // Variations
+      if (key === "v") {
+        setShowActionMenu(false);
+        const vars = generateVariations(selected.domain);
+        log(`Generated ${vars.length} variations of ${selected.domain}`, theme.info);
+        if (vars.length > 0) processAllDomains(vars, true);
+        return;
+      }
+
+      // TLD expansion
+      if (key === "e") {
+        setShowActionMenu(false);
+        const name = selected.domain.split(".")[0] || "";
+        const expanded = expandTlds(name, "popular");
+        log(`Expanded "${name}" into ${expanded.length} TLD variants`, theme.info);
+        if (expanded.length > 0) processAllDomains(expanded, domains.length > 0);
+        return;
+      }
+
+      // Export
+      if (key === "x") {
+        setShowActionMenu(false);
+        setInputMode("export");
+        setMode("input");
+        setInputValue("");
+        return;
+      }
+
+      // Watch
+      if (key === "w") {
+        setShowActionMenu(false);
+        setDomains((prev: DomainEntry[]) => {
+          const u = [...prev];
+          if (idx >= 0) u[idx] = { ...u[idx]!, tagged: true };
+          return u;
+        });
+        log(`Tagged ${selected.domain} for watching`, theme.info);
+        return;
+      }
+
+      // Clear cache
+      if (key === "c") {
+        setShowActionMenu(false);
+        const count = clearCache(selected.domain);
+        log(`Cleared cache for ${selected.domain} (${count} entries)`, theme.info);
+        return;
+      }
+
+      // History
+      if (key === "h") {
+        setShowActionMenu(false);
+        const history = getScanHistory(selected.domain, 5);
+        if (history.length > 0) {
+          log(`─── History for ${selected.domain} ───`, theme.secondary);
+          for (const h of history) {
+            log(`  ${h.scanned_at} — ${h.status}${h.score ? ` (${h.score})` : ""}`, theme.textSecondary);
+          }
+        } else {
+          log(`No scan history for ${selected.domain}`, theme.textMuted);
+        }
+        return;
+      }
+
+      // Load previous
+      if (key === "l") {
+        setShowActionMenu(false);
+        try {
+          const prevScan = getLatestScan(selected.domain);
+          if (prevScan && idx >= 0) {
+            setDomains((prev: DomainEntry[]) => { const u = [...prev]; u[idx] = { ...prevScan, tagged: prev[idx]!.tagged }; return u; });
+            log(`Loaded last saved scan for ${selected.domain}`, theme.info);
+          } else {
+            log(`No saved scan for ${selected.domain}`, theme.textMuted);
+          }
+        } catch { log("Could not load scan", theme.error); }
+        return;
+      }
+
+      return; // Consume all other keys while menu is open
+    }
+
     // Toggle portfolio dashboard
     if (key === "b" && mode !== "input") { setShowPortfolio((v) => !v); return; }
     if (showPortfolio && key === "escape") { setShowPortfolio(false); return; }
@@ -773,26 +923,12 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         log(`Cleared cache for ${selected.domain} (${count} entries)`, theme.info);
       }
 
-      // Rescan selected domain
+      // Context menu
       else if (key === "return" && selected && mode !== "scanning" && !showMarket && !showPortfolio) {
-        log(`Rescanning ${selected.domain}...`, theme.info);
-        // Clear cache for this domain first
-        clearCache(selected.domain);
-        // Re-process just this domain
-        const idx = domains.indexOf(selected);
-        if (idx >= 0) {
-          setDomains((prev: DomainEntry[]) => {
-            const u = [...prev];
-            u[idx] = { ...createEmptyEntry(selected.domain), status: "checking" };
-            return u;
-          });
-          processDomain(selected.domain).then((result) => {
-            setDomains((prev: DomainEntry[]) => {
-              const u = [...prev];
-              u[idx] = result;
-              return u;
-            });
-          });
+        if (showActionMenu) {
+          setShowActionMenu(false);
+        } else {
+          setShowActionMenu(true);
         }
       }
 
@@ -1386,66 +1522,131 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
           {showHelp ? (
             <scrollbox flexGrow={1} paddingLeft={2} paddingRight={2} minHeight={0} scrollbarOptions={{ visible: false }}>
               <box flexDirection="column" gap={0} paddingTop={1}>
-                <text content="COMMANDS" fg={theme.primary} />
+                <text content="GLOBAL SHORTCUTS" fg={theme.primary} />
+                <text content="" />
+                <text content="  /  i          Scan domains" fg={theme.textSecondary} />
+                <text content="  f             Load from file" fg={theme.textSecondary} />
+                <text content="  e             TLD expansion" fg={theme.textSecondary} />
+                <text content="  Space         Tag / untag" fg={theme.textSecondary} />
+                <text content="  Tab           Cycle intel tabs" fg={theme.textSecondary} />
+                <text content="  n             Toggle recon mode" fg={theme.textSecondary} />
+                <text content="  b             Portfolio dashboard" fg={theme.textSecondary} />
+                <text content="  m             Marketplace" fg={theme.textSecondary} />
+                <text content="  s             Cycle status filter" fg={theme.textSecondary} />
+                <text content="  o             Cycle sort" fg={theme.textSecondary} />
+                <text content="  q             Quit" fg={theme.textSecondary} />
+                <text content="  ?             This help" fg={theme.textSecondary} />
+                <text content="" />
+                <text content="DOMAIN ACTIONS (Enter to open menu)" fg={theme.primary} />
+                <text content="" />
+                <text content="  r             Register" fg={theme.textSecondary} />
+                <text content="  z             Snipe" fg={theme.textSecondary} />
+                <text content="  p             Add to portfolio" fg={theme.textSecondary} />
+                <text content="  d             Suggest similar" fg={theme.textSecondary} />
+                <text content="  v             Variations" fg={theme.textSecondary} />
+                <text content="  w             Tag for watch" fg={theme.textSecondary} />
+                <text content="  h             Scan history" fg={theme.textSecondary} />
+                <text content="  c             Clear cache" fg={theme.textSecondary} />
+                <text content="  x             Export" fg={theme.textSecondary} />
+                <text content="  Enter         Rescan" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Navigation" fg={theme.secondary} />
                 <text content="  ↑/k  ↓/j     Move selection" fg={theme.textSecondary} />
                 <text content="  PgUp PgDn     Jump 10" fg={theme.textSecondary} />
-                <text content="  g / Home      First" fg={theme.textSecondary} />
-                <text content="  End           Last" fg={theme.textSecondary} />
-                <text content="  Tab / `       Cycle INTEL tabs" fg={theme.textSecondary} />
-                <text content="" />
-                <text content="Scanning" fg={theme.secondary} />
-                <text content="  /  i          Enter domains" fg={theme.textSecondary} />
-                <text content="  f             Load from file" fg={theme.textSecondary} />
-                <text content="  e             TLD expansion" fg={theme.textSecondary} />
-                <text content="  v             Variations of selected" fg={theme.textSecondary} />
-                <text content="" />
-                <text content="Actions" fg={theme.secondary} />
-                <text content="  SPACE         Tag / untag domain" fg={theme.textSecondary} />
-                <text content="  r             Register selected" fg={theme.textSecondary} />
-                <text content="  a             Bulk register tagged (2x)" fg={theme.textSecondary} />
-                <text content="  d             Suggest similar domains" fg={theme.textSecondary} />
-                <text content="  p             Add to portfolio" fg={theme.textSecondary} />
-                <text content="  z             Snipe domain (expired = auto drop catch)" fg={theme.textSecondary} />
-                <text content="  c             Clear cache for selected" fg={theme.textSecondary} />
-                <text content="  Enter         Rescan selected domain" fg={theme.textSecondary} />
-                <text content="  h             Show scan history" fg={theme.textSecondary} />
-                <text content="  l             Load previous scan result" fg={theme.textSecondary} />
-                <text content="  w             Watch tagged (1h)" fg={theme.textSecondary} />
-                <text content="" />
-                <text content="Filter & Sort" fg={theme.secondary} />
-                <text content="  s             Cycle status filter" fg={theme.textSecondary} />
-                <text content="  o             Cycle sort field + order" fg={theme.textSecondary} />
-                <text content="" />
-                <text content="Recon" fg={theme.secondary} />
-                <text content="  n             Toggle recon mode" fg={theme.textSecondary} />
-                <text content="                Enables port scan, WAF, headers," fg={theme.textDisabled} />
-                <text content="                CORS, zone transfer, takeover detect" fg={theme.textDisabled} />
-                <text content="                (rescan required after toggling)" fg={theme.textDisabled} />
-                <text content="" />
-                <text content="Marketplace" fg={theme.secondary} />
-                <text content="  m             Open/close marketplace" fg={theme.textSecondary} />
-                <text content="  /             Search listings (in marketplace)" fg={theme.textSecondary} />
-                <text content="  1 2 3         Switch: Browse / My Listings / My Offers" fg={theme.textSecondary} />
-                <text content="  Enter         View listing details" fg={theme.textSecondary} />
-                <text content="  l             List selected domain for sale" fg={theme.textSecondary} />
-                <text content="  o             Make offer (in detail view)" fg={theme.textSecondary} />
-                <text content="  r             Refresh listings" fg={theme.textSecondary} />
-                <text content="" />
-                <text content="Portfolio" fg={theme.secondary} />
-                <text content="  b             Portfolio dashboard" fg={theme.textSecondary} />
-                <text content="  p             Add selected to portfolio" fg={theme.textSecondary} />
+                <text content="  g / Home      First     End   Last" fg={theme.textSecondary} />
                 <text content="" />
                 <text content="Session" fg={theme.secondary} />
                 <text content="  Ctrl+S        Save session" fg={theme.textSecondary} />
                 <text content="  Ctrl+L        Load session" fg={theme.textSecondary} />
-                <text content="  x             Export CSV/JSON" fg={theme.textSecondary} />
+                <text content="  a             Bulk register tagged (2x confirm)" fg={theme.textSecondary} />
                 <text content="" />
-                <text content="  ?             Toggle this help" fg={theme.textSecondary} />
-                <text content="  q / Ctrl+C    Quit" fg={theme.textSecondary} />
+                <text content="Marketplace (when open)" fg={theme.secondary} />
+                <text content="  / 1 2 3       Search / Browse / Mine / Offers" fg={theme.textSecondary} />
+                <text content="  l             List domain for sale" fg={theme.textSecondary} />
+                <text content="  o             Make offer (detail view)" fg={theme.textSecondary} />
               </box>
             </scrollbox>
+          ) : showActionMenu && selected ? (
+            <box flexGrow={1} paddingLeft={2} paddingTop={1} minHeight={0} flexDirection="column">
+              {/* Menu header */}
+              <box flexDirection="row" gap={1}>
+                <text content={selected.domain} fg={theme.text} />
+                <text content={`(${statusStyle(selected.status).label})`} fg={statusStyle(selected.status).fg} />
+              </box>
+              <text content="" />
+
+              {/* Available actions — context-dependent */}
+              {(selected.status === "available" || selected.status === "expired") && registrarConfig?.apiKey && (
+                <box flexDirection="row" gap={1} paddingLeft={1}>
+                  <box backgroundColor={theme.primaryDim}><text content=" r " fg={theme.primary} /></box>
+                  <text content="Register this domain" fg={theme.textSecondary} />
+                </box>
+              )}
+
+              {(selected.status === "taken" || selected.status === "expired") && (
+                <box flexDirection="row" gap={1} paddingLeft={1}>
+                  <box backgroundColor={theme.warningDim}><text content=" z " fg={theme.warning} /></box>
+                  <text content="Snipe (auto-register when it drops)" fg={theme.textSecondary} />
+                </box>
+              )}
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.secondaryDim}><text content=" p " fg={theme.secondary} /></box>
+                <text content="Add to portfolio" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.infoDim}><text content=" d " fg={theme.info} /></box>
+                <text content="Suggest similar domains" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.infoDim}><text content=" v " fg={theme.info} /></box>
+                <text content="Generate variations" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.infoDim}><text content=" e " fg={theme.info} /></box>
+                <text content="Check other TLDs" fg={theme.textSecondary} />
+              </box>
+
+              <text content="" />
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.textDisabled}><text content=" w " fg={theme.text} /></box>
+                <text content="Tag for watching" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.textDisabled}><text content=" h " fg={theme.text} /></box>
+                <text content="View scan history" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.textDisabled}><text content=" l " fg={theme.text} /></box>
+                <text content="Load previous scan" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.textDisabled}><text content=" c " fg={theme.text} /></box>
+                <text content="Clear cache" fg={theme.textSecondary} />
+              </box>
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.textDisabled}><text content=" x " fg={theme.text} /></box>
+                <text content="Export results" fg={theme.textSecondary} />
+              </box>
+
+              <text content="" />
+
+              <box flexDirection="row" gap={1} paddingLeft={1}>
+                <box backgroundColor={theme.primaryDim}><text content=" ⏎ " fg={theme.primary} /></box>
+                <text content="Rescan domain" fg={theme.textSecondary} />
+              </box>
+
+              <text content="" />
+              <text content="  Press a key to act, Esc to cancel" fg={theme.textDisabled} />
+            </box>
           ) : selected ? (
             <scrollbox flexGrow={1} paddingLeft={1} paddingRight={1} minHeight={0} scrollbarOptions={{ visible: true }}>
               <box flexDirection="column" gap={0} paddingRight={1}>
@@ -2110,39 +2311,46 @@ export function App({ initialDomains, batchFile, autoRegister = false }: AppProp
         <text content={dLine(width)} fg={theme.border} paddingLeft={1} />
         <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
           <box flexDirection="row" gap={1}>
-            {mode !== "input" ? (
-              (() => {
-                const footerHints: { key: string; label: string; priority: number; onClick?: () => void }[] = [
-                  { key: "/", label: "scan", priority: 1, onClick: () => { setInputMode("domain"); setMode("input"); setInputValue(""); } },
-                  { key: "␣", label: "tag", priority: 2 },
-                  { key: "?", label: "help", priority: 3, onClick: () => setShowHelp((v) => !v) },
-                  { key: "n", label: reconMode ? "recon:ON" : "recon", priority: 4, onClick: () => setReconMode((v) => !v) },
-                  { key: "m", label: "market", priority: 5, onClick: () => { if (!showMarket) { setShowMarket(true); setMarketView("browse"); setMarketSelectedIdx(0); void loadMarketListings(); } else { setShowMarket(false); } } },
-                  { key: "z", label: "snipe", priority: 6 },
-                  { key: "e", label: "expand", priority: 7, onClick: () => { setInputMode("expand"); setMode("input"); setInputValue(""); } },
-                  { key: "Tab", label: "tabs", priority: 8 },
-                  ...(registrarConfig?.apiKey ? [{ key: "r", label: "reg", priority: 9 }] : []),
-                  { key: "d", label: "suggest", priority: 10 },
-                  { key: "b", label: showPortfolio ? "close" : "dash", priority: 11, onClick: () => setShowPortfolio((v) => !v) },
-                  { key: "p", label: "portfolio", priority: 12 },
-                ];
-                const maxHints = Math.floor((width - 20) / 10);
-                const visibleHints = footerHints.slice(0, maxHints);
-                return (
-                  <>
-                    {visibleHints.map((h) => (
-                      <box key={h.key} flexDirection="row" gap={0} onMouseDown={h.onClick}>
-                        <box backgroundColor={theme.textDisabled}><text content={` ${h.key} `} fg={theme.background} /></box>
-                        <text content={h.label} fg={h.key === "n" && reconMode ? theme.error : h.key === "b" && showPortfolio ? theme.primary : h.key === "m" && showMarket ? theme.secondary : theme.textMuted} />
-                      </box>
-                    ))}
-                  </>
-                );
-              })()
-            ) : (
+            {showActionMenu ? (
+              <>
+                <text content="Press a key or" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" esc " fg={theme.background} /></box>
+                <text content="cancel" fg={theme.textMuted} />
+              </>
+            ) : showMarket ? (
+              <>
+                <box backgroundColor={theme.textDisabled}><text content=" 1 " fg={theme.background} /></box><text content="browse" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" / " fg={theme.background} /></box><text content="search" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" m " fg={theme.background} /></box><text content="close" fg={theme.textMuted} />
+              </>
+            ) : showPortfolio ? (
+              <>
+                <box backgroundColor={theme.textDisabled}><text content=" b " fg={theme.background} /></box><text content="close" fg={theme.textMuted} />
+              </>
+            ) : mode === "input" ? (
               <>
                 <box backgroundColor={theme.textDisabled}><text content=" ⏎ " fg={theme.background} /></box><text content="submit" fg={theme.textMuted} />
                 <box backgroundColor={theme.textDisabled}><text content=" esc " fg={theme.background} /></box><text content="cancel" fg={theme.textMuted} />
+              </>
+            ) : mode === "idle" ? (
+              <>
+                <box backgroundColor={theme.primaryDim} onMouseDown={() => { setInputMode("domain"); setMode("input"); setInputValue(""); }}><text content=" / " fg={theme.primary} /></box><text content="scan" fg={theme.textMuted} />
+                <box backgroundColor={theme.primaryDim} onMouseDown={() => { setInputMode("expand"); setMode("input"); setInputValue(""); }}><text content=" e " fg={theme.primary} /></box><text content="expand" fg={theme.textMuted} />
+                <box backgroundColor={theme.primaryDim} onMouseDown={() => { setInputMode("file"); setMode("input"); setInputValue(""); }}><text content=" f " fg={theme.primary} /></box><text content="file" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled} onMouseDown={() => setShowHelp(true)}><text content=" ? " fg={theme.background} /></box><text content="help" fg={theme.textMuted} />
+              </>
+            ) : selected ? (
+              <>
+                <box backgroundColor={theme.primaryDim} onMouseDown={() => setShowActionMenu(true)}><text content=" ⏎ " fg={theme.primary} /></box><text content="actions" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" ␣ " fg={theme.background} /></box><text content="tag" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled} onMouseDown={() => { setInputMode("domain"); setMode("input"); setInputValue(""); }}><text content=" / " fg={theme.background} /></box><text content="scan" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" Tab " fg={theme.background} /></box><text content="tabs" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled} onMouseDown={() => setShowHelp(true)}><text content=" ? " fg={theme.background} /></box><text content="all" fg={theme.textMuted} />
+              </>
+            ) : (
+              <>
+                <box backgroundColor={theme.textDisabled}><text content=" / " fg={theme.background} /></box><text content="scan" fg={theme.textMuted} />
+                <box backgroundColor={theme.textDisabled}><text content=" ? " fg={theme.background} /></box><text content="help" fg={theme.textMuted} />
               </>
             )}
           </box>
