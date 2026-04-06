@@ -1,6 +1,6 @@
 {
   "name": "domsniper",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "All-in-one domain intelligence toolkit — availability checker, security recon, portfolio manager. Built with Bun.",
   "module": "src/index.tsx",
   "type": "module",
