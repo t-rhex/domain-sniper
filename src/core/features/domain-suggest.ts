@@ -1,3 +1,5 @@
+import { scoreDomain } from "./scoring.js";
+
 const PREFIXES = [
   "get", "try", "use", "go", "my", "hey", "the",
   "super", "hyper", "ultra", "mega", "meta", "neo",
@@ -84,4 +86,43 @@ export function generateSuggestions(
   }
 
   return suggestions.slice(0, maxResults);
+}
+
+export interface ScoredSuggestion extends Suggestion {
+  score: number;
+  grade: string;
+}
+
+/**
+ * Generate suggestions across multiple TLDs, scored and sorted by quality
+ */
+export function generateScoredSuggestions(
+  keyword: string,
+  tlds: string[] = ["com", "io", "dev", "app", "co"],
+  maxResults: number = 30
+): ScoredSuggestion[] {
+  const word = keyword.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!word) return [];
+
+  const all: ScoredSuggestion[] = [];
+  const seen = new Set<string>();
+
+  for (const tld of tlds) {
+    const suggestions = generateSuggestions(word, tld, 50);
+    for (const s of suggestions) {
+      if (seen.has(s.domain)) continue;
+      seen.add(s.domain);
+      const score = scoreDomain(s.domain);
+      all.push({
+        ...s,
+        score: score.total,
+        grade: score.total >= 85 ? "A+" : score.total >= 75 ? "A" : score.total >= 65 ? "B+" : score.total >= 55 ? "B" : score.total >= 45 ? "C+" : score.total >= 35 ? "C" : "D",
+      });
+    }
+  }
+
+  // Sort by score descending
+  all.sort((a, b) => b.score - a.score);
+
+  return all.slice(0, maxResults);
 }
